@@ -1,0 +1,7 @@
+{
+  "name": "المستشار الأكاديمي الذكي - Smart Academic Advisor",
+  "description": "نظام التوجيه والإرشاد الأكاديمي الذكي لبرامج الساعات المعتمدة في علوم الحاسب - AI-Powered Academic Advising & Rules Engine",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

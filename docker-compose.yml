@@ -1,0 +1,31 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: smart_academic_advisor_app
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://advisor_user:advisor_pass@postgres:5432/advisor_db?schema=public
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: smart_academic_advisor_db
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=advisor_user
+      - POSTGRES_PASSWORD=advisor_pass
+      - POSTGRES_DB=advisor_db
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  pgdata:

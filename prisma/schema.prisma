@@ -1,0 +1,316 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  ADMIN
+  INSTRUCTOR
+  ACADEMIC_ADVISOR
+  STUDENT
+  PROCESS_OFFICER
+  DEPARTMENT_HEAD
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum PlanStatus {
+  DRAFT
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+  ARCHIVED
+}
+
+enum TrainingStatus {
+  PENDING
+  ACCEPTED
+  PASSED
+  FAILED
+}
+
+enum CourseStatus {
+  PASSED
+  FAILED
+  ENROLLED
+  IN_PROGRESS
+  WITHDRAWN
+  INCOMPLETE
+}
+
+model User {
+  id            String         @id @default(uuid())
+  email         String         @unique
+  passwordHash  String
+  nameAr        String
+  nameEn        String
+  role          Role
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  student       Student?
+  instructor    Instructor?
+  advisor       Advisor?
+  auditLogs     AuditLog[]
+  notifications Notification[]
+
+  @@index([role])
+}
+
+model Student {
+  id                  String             @id @default(uuid())
+  userId              String             @unique
+  user                User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  studentCode         String             @unique
+  level               Int                @default(1)
+  track               String             @default("General")
+  cumulativeGpa       Float              @default(0.0)
+  previousGpa         Float              @default(0.0)
+  completedCredits    Int                @default(0)
+  enrolledCredits     Int                @default(0)
+  warningCount        Int                @default(0)
+  consecutiveWarnings Int                @default(0)
+  riskLevel           RiskLevel          @default(LOW)
+  advisorId           String?
+  advisor             Advisor?           @relation(fields: [advisorId], references: [id], onDelete: SetNull)
+
+  records             CourseRecord[]
+  studyPlans          StudyPlan[]
+  trainings           SummerTraining[]
+  graduationProjects  GraduationProject[]
+
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  @@index([advisorId])
+  @@index([riskLevel])
+  @@index([cumulativeGpa])
+}
+
+model Advisor {
+  id         String     @id @default(uuid())
+  userId     String     @unique
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  office     String?
+  students   Student[]
+
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+}
+
+model Instructor {
+  id         String            @id @default(uuid())
+  userId     String            @unique
+  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department String
+  offerings  CourseOffering[]
+
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+}
+
+model Course {
+  id             String            @id @default(uuid())
+  code           String            @unique
+  nameAr         String
+  nameEn         String
+  credits        Int               @default(3)
+  level          Int               @default(1)
+  semester       Int               @default(1)
+  isMandatory    Boolean           @default(true)
+  track          String?
+  department     String
+  descriptionAr  String?
+  descriptionEn  String?
+
+  prerequisites  Prerequisite[]    @relation("CoursePrerequisites")
+  prerequisiteOf Prerequisite[]    @relation("CourseIsPrerequisiteFor")
+  offerings      CourseOffering[]
+  records        CourseRecord[]
+
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  @@index([code])
+  @@index([level])
+}
+
+model Prerequisite {
+  id           String   @id @default(uuid())
+  courseId     String
+  prereqCode   String
+  course       Course   @relation("CoursePrerequisites", fields: [courseId], references: [id], onDelete: Cascade)
+  prereqCourse Course?  @relation("CourseIsPrerequisiteFor", fields: [prereqCode], references: [code], onDelete: Cascade)
+
+  @@unique([courseId, prereqCode])
+}
+
+model Semester {
+  id         String           @id @default(uuid())
+  nameAr     String
+  nameEn     String
+  code       String           @unique
+  isCurrent  Boolean          @default(false)
+  isSummer   Boolean          @default(false)
+  startDate  DateTime
+  endDate    DateTime
+  offerings  CourseOffering[]
+
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+}
+
+model CourseOffering {
+  id             String         @id @default(uuid())
+  courseId       String
+  course         Course         @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  semesterId     String
+  semester       Semester       @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+  instructorId   String
+  instructor     Instructor     @relation(fields: [instructorId], references: [id], onDelete: Cascade)
+  capacity       Int            @default(50)
+  enrolledCount  Int            @default(0)
+  scheduleAr     String
+  scheduleEn     String
+  hall           String
+
+  records        CourseRecord[]
+
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([courseId, semesterId])
+}
+
+model CourseRecord {
+  id                   String          @id @default(uuid())
+  studentId            String
+  student              Student         @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  courseId             String
+  course               Course          @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  offeringId           String?
+  offering             CourseOffering? @relation(fields: [offeringId], references: [id], onDelete: SetNull)
+
+  attempt              Int             @default(1)
+  status               CourseStatus    @default(ENROLLED)
+  grade                String?
+  gradePoints          Float?
+  courseworkMark       Float?
+  finalMark            Float?
+  totalMark            Float?
+  attendancePercentage Float?          @default(100.0)
+
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+
+  @@index([studentId, courseId])
+  @@index([status])
+}
+
+model StudyPlan {
+  id            String      @id @default(uuid())
+  studentId     String
+  student       Student     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  status        PlanStatus  @default(DRAFT)
+  advisorNotes  String?
+  planDataJson  String      // Semester-by-semester course arrays
+
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@index([studentId])
+}
+
+model SummerTraining {
+  id           String         @id @default(uuid())
+  studentId    String
+  student      Student        @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  company      String
+  hours        Int            @default(120)
+  periodWeeks  Int            @default(4)
+  status       TrainingStatus @default(PENDING)
+  documentUrl  String?
+
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  @@index([studentId])
+}
+
+model GraduationProject {
+  id          String   @id @default(uuid())
+  studentId   String
+  student     Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  titleAr     String
+  titleEn     String
+  supervisor  String
+  passedPart1 Boolean  @default(false)
+  passedPart2 Boolean  @default(false)
+  grade       String?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([studentId])
+}
+
+model AcademicRule {
+  id                String   @id @default(uuid())
+  key               String   @unique
+  titleAr           String
+  titleEn           String
+  valueString       String
+  defaultValue      String
+  needsVerification Boolean  @default(false)
+  notesAr           String?
+  notesEn           String?
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userName  String
+  userRole  Role
+  action    String
+  entity    String
+  entityId  String
+  detailsAr String
+  detailsEn String
+  before    String?
+  after     String?
+
+  timestamp DateTime @default(now())
+
+  @@index([userId])
+  @@index([entity, entityId])
+  @@index([timestamp])
+}
+
+model Notification {
+  id          String   @id @default(uuid())
+  recipientId String
+  user        User?    @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  type        String
+  titleAr     String
+  titleEn     String
+  messageAr   String
+  messageEn   String
+  read        Boolean  @default(false)
+
+  createdAt   DateTime @default(now())
+
+  @@index([recipientId, read])
+}
