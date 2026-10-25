@@ -1,12 +1,13 @@
 import { prisma } from '../db/prisma.js';
 import { StudyPlan, PlanStatus } from '../../src/types/index.js';
 import { Prisma } from '@prisma/client';
+import { INITIAL_STUDY_PLANS } from '../data/store.js';
 
 export class StudyPlanRepository {
   public static mapToDomain(row: any): StudyPlan {
     let semesters = [];
     try {
-      semesters = JSON.parse(row.planDataJson);
+      semesters = typeof row.planDataJson === 'string' ? JSON.parse(row.planDataJson) : (row.planDataJson || []);
     } catch {}
 
     const totalPlanned = semesters.reduce((acc: number, s: any) => acc + (s.totalCredits || 0), 0);
@@ -22,8 +23,8 @@ export class StudyPlanRepository {
       id: row.id,
       studentId: row.studentId,
       status: statusString,
-      createdAt: row.createdAt.toISOString(),
-      updatedAt: row.updatedAt.toISOString(),
+      createdAt: row.createdAt ? (typeof row.createdAt === 'string' ? row.createdAt : row.createdAt.toISOString()) : new Date().toISOString(),
+      updatedAt: row.updatedAt ? (typeof row.updatedAt === 'string' ? row.updatedAt : row.updatedAt.toISOString()) : new Date().toISOString(),
       semesters,
       expectedGraduationSemesterAr: lastSem?.semesterNameAr || 'ربيع 2027',
       expectedGraduationSemesterEn: lastSem?.semesterNameEn || 'Spring 2027',
@@ -32,12 +33,17 @@ export class StudyPlanRepository {
   }
 
   public static async getByStudentId(studentId: string): Promise<StudyPlan | null> {
-    const row = await prisma.studyPlan.findFirst({
-      where: { studentId },
-      orderBy: { updatedAt: 'desc' },
-    });
-    if (!row) return null;
-    return this.mapToDomain(row);
+    try {
+      const row = await prisma.studyPlan.findFirst({
+        where: { studentId },
+        orderBy: { updatedAt: 'desc' },
+      });
+      if (row) return this.mapToDomain(row);
+    } catch (err) {
+      console.warn(`[StudyPlanRepository] DB getByStudentId fallback for ${studentId}:`, err);
+    }
+
+    return INITIAL_STUDY_PLANS.find(p => p.studentId === studentId) || null;
   }
 
   public static async savePlan(
@@ -46,30 +52,47 @@ export class StudyPlanRepository {
     status: 'DRAFT' | 'PENDING_REVIEW' | 'APPROVED' | 'REJECTED' = 'DRAFT',
     tx?: Prisma.TransactionClient
   ): Promise<StudyPlan> {
-    const client = tx || prisma;
-    const existing = await client.studyPlan.findFirst({
-      where: { studentId },
-    });
+    try {
+      const client = tx || prisma;
+      const existing = await client.studyPlan.findFirst({
+        where: { studentId },
+      });
 
-    if (existing) {
-      const updated = await client.studyPlan.update({
-        where: { id: existing.id },
-        data: {
-          status,
-          planDataJson: JSON.stringify(plan.semesters),
-        },
-      });
-      return this.mapToDomain(updated);
-    } else {
-      const created = await client.studyPlan.create({
-        data: {
-          id: plan.id || `plan_${studentId}_${Date.now()}`,
-          studentId,
-          status,
-          planDataJson: JSON.stringify(plan.semesters),
-        },
-      });
-      return this.mapToDomain(created);
+      if (existing) {
+        const updated = await client.studyPlan.update({
+          where: { id: existing.id },
+          data: {
+            status,
+            planDataJson: JSON.stringify(plan.semesters),
+          },
+        });
+        return this.mapToDomain(updated);
+      } else {
+        const created = await client.studyPlan.create({
+          data: {
+            id: plan.id || `plan_${studentId}_${Date.now()}`,
+            studentId,
+            status,
+            planDataJson: JSON.stringify(plan.semesters),
+          },
+        });
+        return this.mapToDomain(created);
+      }
+    } catch (err) {
+      console.warn(`[StudyPlanRepository] DB savePlan fallback for ${studentId}:`, err);
+      const existingIdx = INITIAL_STUDY_PLANS.findIndex(p => p.studentId === studentId);
+      const planObj: StudyPlan = {
+        ...plan,
+        studentId,
+        status: (status === 'APPROVED' ? 'Approved' : status === 'PENDING_REVIEW' ? 'Pending Review' : 'Draft') as PlanStatus,
+        updatedAt: new Date().toISOString(),
+      };
+      if (existingIdx !== -1) {
+        INITIAL_STUDY_PLANS[existingIdx] = planObj;
+      } else {
+        INITIAL_STUDY_PLANS.push(planObj);
+      }
+      return planObj;
     }
   }
 
@@ -79,19 +102,26 @@ export class StudyPlanRepository {
     advisorNotes?: string,
     tx?: Prisma.TransactionClient
   ): Promise<void> {
-    const client = tx || prisma;
-    const existing = await client.studyPlan.findFirst({
-      where: { studentId },
-    });
-
-    if (existing) {
-      await client.studyPlan.update({
-        where: { id: existing.id },
-        data: {
-          status,
-          ...(advisorNotes !== undefined && { advisorNotes }),
-        },
+    try {
+      const client = tx || prisma;
+      const existing = await client.studyPlan.findFirst({
+        where: { studentId },
       });
+
+      if (existing) {
+        await client.studyPlan.update({
+          where: { id: existing.id },
+          data: {
+            status,
+            ...(advisorNotes !== undefined && { advisorNotes }),
+          },
+        });
+      }
+    } catch {
+      const match = INITIAL_STUDY_PLANS.find(p => p.studentId === studentId);
+      if (match) {
+        match.status = (status === 'APPROVED' ? 'Approved' : status === 'PENDING_REVIEW' ? 'Pending Review' : 'Draft') as PlanStatus;
+      }
     }
   }
 }

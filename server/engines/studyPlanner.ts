@@ -18,6 +18,14 @@ export class StudyPlanner {
    * Generates a fully legal, semester-by-semester graduation study plan.
    * NEVER schedules a course before its prerequisites are met.
    */
+  public static generateStudyPlan(
+    student: Student,
+    allCourses: Course[],
+    options: PlanOptions = { pace: 'NORMAL' }
+  ): StudyPlan {
+    return this.generatePlan(student, allCourses, options);
+  }
+
   public static generatePlan(
     student: Student,
     allCourses: Course[],

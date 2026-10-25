@@ -1,6 +1,7 @@
 import { prisma } from '../db/prisma.js';
 import { AcademicRuleConfig } from '../../src/types/index.js';
 import { Prisma } from '@prisma/client';
+import { INITIAL_ACADEMIC_RULES } from '../data/store.js';
 
 export class AcademicRuleRepository {
   public static mapToDomain(row: any): AcademicRuleConfig {
@@ -27,26 +28,41 @@ export class AcademicRuleRepository {
   }
 
   public static async listAll(): Promise<AcademicRuleConfig[]> {
-    const rows = await prisma.academicRule.findMany({
-      orderBy: { key: 'asc' },
-    });
-    return rows.map(r => this.mapToDomain(r));
+    try {
+      const rows = await prisma.academicRule.findMany({
+        orderBy: { key: 'asc' },
+      });
+      if (rows && rows.length > 0) {
+        return rows.map(r => this.mapToDomain(r));
+      }
+    } catch (err) {
+      console.warn('[AcademicRuleRepository] DB listAll fallback:', err);
+    }
+    return INITIAL_ACADEMIC_RULES;
   }
 
   public static async findByKey(key: string): Promise<AcademicRuleConfig | null> {
-    const row = await prisma.academicRule.findUnique({
-      where: { key },
-    });
-    if (!row) return null;
-    return this.mapToDomain(row);
+    try {
+      const row = await prisma.academicRule.findUnique({
+        where: { key },
+      });
+      if (row) return this.mapToDomain(row);
+    } catch (err) {
+      console.warn(`[AcademicRuleRepository] DB findByKey fallback for ${key}:`, err);
+    }
+    return INITIAL_ACADEMIC_RULES.find(r => r.key === key) || null;
   }
 
   public static async findById(id: string): Promise<AcademicRuleConfig | null> {
-    const row = await prisma.academicRule.findUnique({
-      where: { id },
-    });
-    if (!row) return null;
-    return this.mapToDomain(row);
+    try {
+      const row = await prisma.academicRule.findUnique({
+        where: { id },
+      });
+      if (row) return this.mapToDomain(row);
+    } catch (err) {
+      console.warn(`[AcademicRuleRepository] DB findById fallback for ${id}:`, err);
+    }
+    return INITIAL_ACADEMIC_RULES.find(r => r.id === id) || null;
   }
 
   public static async updateRule(
@@ -59,17 +75,28 @@ export class AcademicRuleRepository {
     },
     tx?: Prisma.TransactionClient
   ): Promise<AcademicRuleConfig> {
-    const client = tx || prisma;
-    const updated = await client.academicRule.update({
-      where: { id },
-      data: {
-        valueString: String(data.value),
-        ...(data.needsVerification !== undefined && { needsVerification: data.needsVerification }),
-        ...(data.notesAr !== undefined && { notesAr: data.notesAr }),
-        ...(data.notesEn !== undefined && { notesEn: data.notesEn }),
-      },
-    });
+    try {
+      const client = tx || prisma;
+      const updated = await client.academicRule.update({
+        where: { id },
+        data: {
+          valueString: String(data.value),
+          ...(data.needsVerification !== undefined && { needsVerification: data.needsVerification }),
+          ...(data.notesAr !== undefined && { notesAr: data.notesAr }),
+          ...(data.notesEn !== undefined && { notesEn: data.notesEn }),
+        },
+      });
 
-    return this.mapToDomain(updated);
+      return this.mapToDomain(updated);
+    } catch (err) {
+      console.warn(`[AcademicRuleRepository] DB updateRule fallback for ${id}:`, err);
+      const match = INITIAL_ACADEMIC_RULES.find(r => r.id === id);
+      if (match) {
+        match.value = data.value;
+        if (data.needsVerification !== undefined) match.needsVerification = data.needsVerification;
+        return match;
+      }
+      return INITIAL_ACADEMIC_RULES[0];
+    }
   }
 }

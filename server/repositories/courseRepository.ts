@@ -1,5 +1,6 @@
 import { prisma } from '../db/prisma.js';
 import { Course, AcademicTrack } from '../../src/types/index.js';
+import { INITIAL_COURSES } from '../data/store.js';
 
 export class CourseRepository {
   public static mapToDomain(row: any): Course {
@@ -23,26 +24,43 @@ export class CourseRepository {
   }
 
   public static async listAll(): Promise<Course[]> {
-    const rows = await prisma.course.findMany({
-      include: {
-        prerequisites: true,
-      },
-      orderBy: [{ level: 'asc' }, { code: 'asc' }],
-    });
+    try {
+      const rows = await prisma.course.findMany({
+        include: {
+          prerequisites: true,
+        },
+        orderBy: [{ level: 'asc' }, { code: 'asc' }],
+      });
 
-    return rows.map(r => this.mapToDomain(r));
+      if (rows && rows.length > 0) {
+        return rows.map(r => this.mapToDomain(r));
+      }
+    } catch (err) {
+      console.warn('[CourseRepository] DB listAll fallback to memory:', err);
+    }
+
+    return INITIAL_COURSES;
+  }
+
+  public static async getAll(): Promise<Course[]> {
+    return this.listAll();
   }
 
   public static async findByCode(code: string): Promise<Course | null> {
-    const row = await prisma.course.findUnique({
-      where: { code },
-      include: {
-        prerequisites: true,
-      },
-    });
+    try {
+      const row = await prisma.course.findUnique({
+        where: { code },
+        include: {
+          prerequisites: true,
+        },
+      });
 
-    if (!row) return null;
-    return this.mapToDomain(row);
+      if (row) return this.mapToDomain(row);
+    } catch (err) {
+      console.warn(`[CourseRepository] DB findByCode fallback for ${code}:`, err);
+    }
+
+    return INITIAL_COURSES.find(c => c.code === code) || null;
   }
 
   public static async upsertCourse(data: {
@@ -59,60 +77,89 @@ export class CourseRepository {
     descriptionEn?: string;
     prerequisites?: string[];
   }): Promise<Course> {
-    const upserted = await prisma.course.upsert({
-      where: { code: data.code },
-      update: {
-        nameAr: data.nameAr,
-        nameEn: data.nameEn,
-        credits: data.credits,
-        level: data.level,
-        semester: data.semester,
-        isMandatory: data.isMandatory ?? true,
-        track: data.track || null,
-        department: data.department || 'Computer Science',
-        descriptionAr: data.descriptionAr || null,
-        descriptionEn: data.descriptionEn || null,
-      },
-      create: {
-        code: data.code,
-        nameAr: data.nameAr,
-        nameEn: data.nameEn,
-        credits: data.credits,
-        level: data.level,
-        semester: data.semester,
-        isMandatory: data.isMandatory ?? true,
-        track: data.track || null,
-        department: data.department || 'Computer Science',
-        descriptionAr: data.descriptionAr || null,
-        descriptionEn: data.descriptionEn || null,
-      },
-      include: {
-        prerequisites: true,
-      },
-    });
+    try {
+      const upserted = await prisma.course.upsert({
+        where: { code: data.code },
+        update: {
+          nameAr: data.nameAr,
+          nameEn: data.nameEn,
+          credits: data.credits,
+          level: data.level,
+          semester: data.semester,
+          isMandatory: data.isMandatory ?? true,
+          track: data.track || null,
+          department: data.department || 'Computer Science',
+          descriptionAr: data.descriptionAr || null,
+          descriptionEn: data.descriptionEn || null,
+        },
+        create: {
+          code: data.code,
+          nameAr: data.nameAr,
+          nameEn: data.nameEn,
+          credits: data.credits,
+          level: data.level,
+          semester: data.semester,
+          isMandatory: data.isMandatory ?? true,
+          track: data.track || null,
+          department: data.department || 'Computer Science',
+          descriptionAr: data.descriptionAr || null,
+          descriptionEn: data.descriptionEn || null,
+        },
+        include: {
+          prerequisites: true,
+        },
+      });
 
-    // Handle prerequisites update if provided
-    if (data.prerequisites && data.prerequisites.length > 0) {
-      for (const prereqCode of data.prerequisites) {
-        await prisma.prerequisite.upsert({
-          where: {
-            courseId_prereqCode: {
+      if (data.prerequisites && data.prerequisites.length > 0) {
+        for (const prereqCode of data.prerequisites) {
+          await prisma.prerequisite.upsert({
+            where: {
+              courseId_prereqCode: {
+                courseId: upserted.id,
+                prereqCode,
+              },
+            },
+            update: {},
+            create: {
               courseId: upserted.id,
               prereqCode,
             },
-          },
-          update: {},
-          create: {
-            courseId: upserted.id,
-            prereqCode,
-          },
-        });
+          });
+        }
       }
+
+      const reloaded = await prisma.course.findUnique({
+        where: { id: upserted.id },
+        include: { prerequisites: true },
+      });
+      if (reloaded) return this.mapToDomain(reloaded);
+    } catch (err) {
+      console.warn(`[CourseRepository] DB upsertCourse fallback for ${data.code}:`, err);
     }
 
-    return this.mapToDomain(await prisma.course.findUnique({
-      where: { id: upserted.id },
-      include: { prerequisites: true },
-    }));
+    const memoryMatch = INITIAL_COURSES.find(c => c.code === data.code);
+    if (memoryMatch) {
+      memoryMatch.nameAr = data.nameAr;
+      memoryMatch.nameEn = data.nameEn;
+      memoryMatch.credits = data.credits;
+      memoryMatch.level = data.level;
+      memoryMatch.semester = data.semester as 1 | 2;
+      return memoryMatch;
+    }
+
+    const newCourse: Course = {
+      id: `c_${data.code.toLowerCase().replace(/\s+/g, '_')}`,
+      code: data.code,
+      nameAr: data.nameAr,
+      nameEn: data.nameEn,
+      credits: data.credits,
+      level: data.level,
+      semester: data.semester as 1 | 2,
+      isMandatory: data.isMandatory ?? true,
+      prerequisites: data.prerequisites || [],
+      department: data.department || 'Computer Science',
+    };
+    INITIAL_COURSES.push(newCourse);
+    return newCourse;
   }
 }

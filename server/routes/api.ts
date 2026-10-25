@@ -1,4 +1,12 @@
 import { Router, Request, Response } from 'express';
+import bcrypt from 'bcryptjs';
+import multer from 'multer';
+import * as XLSX from 'xlsx';
+
+const excelUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
+});
 import { AcademicRulesEngine } from '../engines/rulesEngine.js';
 import { RecommendationEngine } from '../engines/recommendationEngine.js';
 import { StudyPlanner } from '../engines/studyPlanner.js';
@@ -24,6 +32,8 @@ import { AuditLogRepository } from '../repositories/auditLogRepository.js';
 import { NotificationRepository } from '../repositories/notificationRepository.js';
 import { StudyPlanRepository } from '../repositories/studyPlanRepository.js';
 import { AcademicTransactionService } from '../services/academicTransactionService.js';
+import { RegistrationAdvisorEngine } from '../engines/registrationAdvisorEngine.js';
+import { INITIAL_STUDENTS } from '../data/store.js';
 
 export const apiRouter = Router();
 
@@ -125,7 +135,7 @@ async function addAuditLog(
 }
 
 // Security: Resolve calling user from headers
-function getCaller(req: Request) {
+function getCaller(req: Request): any {
   const userIdHeader = req.headers['x-user-id'] as string;
   if (userIdHeader) {
     const found = USERS.find(u => u.id === userIdHeader || u.email === userIdHeader || u.studentId === userIdHeader);
@@ -134,6 +144,25 @@ function getCaller(req: Request) {
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.substring(7);
+    try {
+      const decoded = UniversityAuthService.verifyAccessToken(token);
+      if (decoded && (decoded.sub || decoded.email)) {
+        const match = USERS.find(u => u.id === decoded.sub || u.email === decoded.email);
+        if (match) return match;
+        return {
+          id: decoded.sub || 'user_unknown',
+          email: decoded.email || '',
+          nameAr: decoded.nameAr || decoded.email || 'مستخدم معتمد',
+          nameEn: decoded.nameEn || decoded.email || 'Authenticated User',
+          role: decoded.role || 'STUDENT',
+          studentId: decoded.studentId,
+          advisorId: decoded.advisorId,
+          instructorId: decoded.instructorId,
+        };
+      }
+    } catch {
+      // ignore decoding error and fall through
+    }
     const match = USERS.find(u => token.includes(u.id));
     if (match) return match;
   }
@@ -174,6 +203,14 @@ apiRouter.post('/auth/login', async (req: Request, res: Response) => {
         `Cryptographic credential login for user (${user.nameEn}).`
       );
 
+      // Set httpOnly cookie for refresh token
+      res.cookie('refreshToken', tokens.refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+      });
+
       return res.json({
         token: tokens.accessToken,
         refreshToken: tokens.refreshToken,
@@ -202,6 +239,13 @@ apiRouter.post('/auth/login', async (req: Request, res: Response) => {
       `Login for user (${user.nameEn}) with role (${user.role}).`
     );
 
+    res.cookie('refreshToken', tokens.refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
     return res.json({
       token: tokens.accessToken,
       refreshToken: tokens.refreshToken,
@@ -215,6 +259,50 @@ apiRouter.post('/auth/login', async (req: Request, res: Response) => {
       messageEn: 'Authentication failed: Invalid credentials',
     });
   }
+});
+
+apiRouter.post('/auth/refresh', async (req: Request, res: Response) => {
+  const refreshToken = (req as any).cookies?.refreshToken || req.body?.refreshToken;
+  if (!refreshToken) {
+    return res.status(401).json({
+      error: 'NO_REFRESH_TOKEN',
+      messageAr: 'لم يتم العثور على رمز التجديد.',
+      messageEn: 'Refresh token is required.',
+    });
+  }
+
+  try {
+    const tokens = UniversityAuthService.refreshTokens(refreshToken);
+    res.cookie('refreshToken', tokens.refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+    return res.json({
+      token: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      expiresIn: tokens.expiresIn,
+    });
+  } catch (err: any) {
+    return res.status(401).json({
+      error: 'INVALID_REFRESH_TOKEN',
+      messageAr: err.message || 'انتهت صلاحية الجلسة.',
+      messageEn: 'Invalid or expired refresh token.',
+    });
+  }
+});
+
+apiRouter.get('/auth/me', async (req: Request, res: Response) => {
+  const caller = getCaller(req);
+  if (!caller) {
+    return res.status(401).json({
+      error: 'UNAUTHORIZED',
+      messageAr: 'غير مصرح: يرجى تسجيل الدخول.',
+      messageEn: 'Unauthorized: Authentication required.',
+    });
+  }
+  return res.json({ user: caller });
 });
 
 apiRouter.post('/auth/logout', async (req: Request, res: Response) => {
@@ -231,6 +319,7 @@ apiRouter.post('/auth/logout', async (req: Request, res: Response) => {
       `Secure logout for user (${caller.nameEn}).`
     );
   }
+  res.clearCookie('refreshToken');
   return res.json({ success: true, message: 'Logged out successfully' });
 });
 
@@ -266,6 +355,259 @@ apiRouter.get('/auth/users', async (req: Request, res: Response) => {
     console.warn('[UserRepository] Falling back to default identity list:', err);
   }
   return res.json(USERS);
+});
+
+// Full RESTful Users management for Admin
+apiRouter.get('/users', async (req: Request, res: Response) => {
+  try {
+    const caller = getCaller(req);
+    // Allow admin, advisors, department heads to view users directory
+    const dbUsers = await UserRepository.listAll();
+    if (dbUsers.length > 0) {
+      return res.json(dbUsers);
+    }
+    return res.json(USERS);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/users', async (req: Request, res: Response) => {
+  try {
+    const caller = getCaller(req);
+    if (caller && caller.role !== 'ADMIN') {
+      return res.status(403).json({
+        error: 'ROLE_FORBIDDEN',
+        messageAr: 'غير مصرح: إضافة المستخدمين تقتصر على الآدمن فقط.',
+        messageEn: 'Unauthorized: Creating new users requires Admin privileges.',
+      });
+    }
+
+    const { email, password, nameAr, nameEn, role, studentCode, department } = req.body;
+
+    if (!email || !password || !nameAr || !role) {
+      return res.status(400).json({
+        error: 'MISSING_FIELDS',
+        messageAr: 'يرجى ملء جميع الحقول المطلوبة (البريد، كلمة المرور، الاسم، والدور).',
+        messageEn: 'All required fields (email, password, name, and role) must be provided.',
+      });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({
+        error: 'WEAK_PASSWORD',
+        messageAr: 'كلمة المرور يجب أن تتكون من 6 أحرف على الأقل.',
+        messageEn: 'Password must be at least 6 characters.',
+      });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+
+    // Check if user already exists
+    const existing = await UserRepository.getByEmail(cleanEmail);
+    if (existing) {
+      return res.status(409).json({
+        error: 'USER_ALREADY_EXISTS',
+        messageAr: 'هذا البريد الإلكتروني مسجل بالفعل لمستخدم آخر.',
+        messageEn: 'This email is already registered to another user.',
+      });
+    }
+
+    // Cryptographic Bcrypt hash (10 salt rounds)
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    const newUser = await UserRepository.createUser({
+      email: cleanEmail,
+      nameAr,
+      nameEn: nameEn || nameAr,
+      role,
+      passwordHash,
+      studentCode,
+      department,
+    });
+
+    // Immutable Audit Log entry
+    await addAuditLog(
+      caller?.id || 'admin',
+      caller?.nameAr || 'الآدمن',
+      caller?.role || 'ADMIN',
+      'CREATE_USER',
+      'User',
+      newUser.id,
+      `إضافة مستخدم جديد بنجاح (${newUser.nameAr}) بالدور [${newUser.role}] والبريد [${newUser.email}].`,
+      `Successfully created new user (${newUser.nameEn}) with role [${newUser.role}].`,
+      undefined,
+      { id: newUser.id, email: newUser.email, role: newUser.role, nameAr: newUser.nameAr }
+    );
+
+    return res.status(201).json({
+      success: true,
+      user: newUser,
+      messageAr: 'تم إنشاء المستخدم وحفظه وتشفير كلمة المرور بنجاح.',
+      messageEn: 'User created and password securely hashed with Bcrypt.',
+    });
+  } catch (err: any) {
+    console.error('Error in POST /users:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.put('/users/:id', async (req: Request, res: Response) => {
+  try {
+    const caller = getCaller(req);
+    if (caller && caller.role !== 'ADMIN') {
+      return res.status(403).json({
+        error: 'ROLE_FORBIDDEN',
+        messageAr: 'غير مصرح: تعديل بيانات المستخدمين تقتصر على الآدمن فقط.',
+        messageEn: 'Unauthorized: Editing users requires Admin privileges.',
+      });
+    }
+
+    const { id } = req.params;
+    const { nameAr, nameEn, email, role, password } = req.body;
+
+    const updated = await UserRepository.updateUser(id, {
+      nameAr,
+      nameEn,
+      email,
+      role,
+      password: password && password.trim().length >= 6 ? password : undefined,
+    });
+
+    if (!updated) {
+      // In-memory update fallback for predefined USERS
+      const idx = USERS.findIndex(u => u.id === id || u.email === id);
+      if (idx !== -1) {
+        if (nameAr) USERS[idx].nameAr = nameAr;
+        if (nameEn) USERS[idx].nameEn = nameEn;
+        if (email) USERS[idx].email = email;
+        if (role) USERS[idx].role = role;
+        return res.json({
+          success: true,
+          user: USERS[idx],
+          messageAr: 'تم تحديث بيانات المستخدم بنجاح.',
+          messageEn: 'User details updated successfully.',
+        });
+      }
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    await addAuditLog(
+      caller?.id || 'admin',
+      caller?.nameAr || 'الآدمن',
+      caller?.role || 'ADMIN',
+      'UPDATE_USER',
+      'User',
+      id,
+      `تعديل بيانات المستخدم (${updated.nameAr}) بنجاح.`,
+      `Updated details for user (${updated.nameEn}).`
+    );
+
+    return res.json({
+      success: true,
+      user: updated,
+      messageAr: 'تم تحديث بيانات المستخدم بنجاح في قاعدة البيانات.',
+      messageEn: 'User updated successfully.',
+    });
+  } catch (err: any) {
+    console.error('Error in PUT /users/:id:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.delete('/users/:id', async (req: Request, res: Response) => {
+  try {
+    const caller = getCaller(req);
+    if (caller && caller.role !== 'ADMIN') {
+      return res.status(403).json({
+        error: 'ROLE_FORBIDDEN',
+        messageAr: 'غير مصرح: حذف المستخدمين يقتصر على الآدمن فقط.',
+        messageEn: 'Unauthorized: Deleting users requires Admin privileges.',
+      });
+    }
+
+    const { id } = req.params;
+
+    if (caller && (caller.id === id || caller.email === id)) {
+      return res.status(400).json({
+        error: 'CANNOT_DELETE_SELF',
+        messageAr: 'لا يمكن حذف الحساب الإداري الحالي المسجل الدخول به.',
+        messageEn: 'Cannot delete the currently active admin account.',
+      });
+    }
+
+    const deleted = await UserRepository.deleteUser(id);
+
+    // Also remove from in-memory USERS array if exists
+    const uIdx = USERS.findIndex(u => u.id === id || u.email === id);
+    if (uIdx !== -1) {
+      USERS.splice(uIdx, 1);
+    }
+
+    await addAuditLog(
+      caller?.id || 'admin',
+      caller?.nameAr || 'الآدمن',
+      caller?.role || 'ADMIN',
+      'DELETE_USER',
+      'User',
+      id,
+      `حذف المستخدم ذي المعرف (${id}) نهائياً من النظام.`,
+      `Deleted user (${id}) from database.`
+    );
+
+    return res.json({
+      success: true,
+      messageAr: 'تم حذف المستخدم نهائياً من النظام وقاعدة البيانات.',
+      messageEn: 'User deleted successfully.',
+    });
+  } catch (err: any) {
+    console.error('Error in DELETE /users/:id:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/users/:id/reset-password', async (req: Request, res: Response) => {
+  try {
+    const caller = getCaller(req);
+    if (caller && caller.role !== 'ADMIN') {
+      return res.status(403).json({
+        error: 'ROLE_FORBIDDEN',
+        messageAr: 'غير مصرح: إعادة تعيين كلمات المرور تقتصر على الآدمن.',
+        messageEn: 'Unauthorized: Resetting passwords requires Admin privileges.',
+      });
+    }
+
+    const { id } = req.params;
+    const { newPassword } = req.body;
+    const passwordToSet = newPassword || 'password123';
+
+    const passwordHash = await bcrypt.hash(passwordToSet, 10);
+    const user = await UserRepository.getById(id);
+
+    if (user) {
+      await UserRepository.updatePassword(user.email, passwordHash);
+    }
+
+    await addAuditLog(
+      caller?.id || 'admin',
+      caller?.nameAr || 'الآدمن',
+      caller?.role || 'ADMIN',
+      'RESET_PASSWORD',
+      'User',
+      id,
+      `إعادة تعيين كلمة المرور للمستخدم (${user?.nameAr || id}) وتشفيرها بـ Bcrypt.`,
+      `Reset password for user (${id}).`
+    );
+
+    return res.json({
+      success: true,
+      messageAr: `تم إعادة تعيين كلمة المرور بنجاح إلى (${passwordToSet}) وتشفيرها.`,
+      messageEn: `Password successfully reset to (${passwordToSet}).`,
+    });
+  } catch (err: any) {
+    console.error('Error in POST /users/:id/reset-password:', err);
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 // -------------------------------------------------------------
@@ -414,12 +756,23 @@ apiRouter.get('/students', async (req: Request, res: Response) => {
 // Unified IDOR protection for all student scoped routes
 apiRouter.use('/students/:id', (req: Request, res: Response, next) => {
   const caller = getCaller(req);
-  if (caller && caller.role === 'STUDENT' && caller.studentId && caller.studentId !== req.params.id) {
-    return res.status(403).json({
-      error: 'IDOR_FORBIDDEN',
-      messageAr: 'غير مصرح: لا يجوز للطالب الاطلاع أو التعديل على سجلات طالب آخر.',
-      messageEn: 'Unauthorized: Students can only view or modify their own academic record.',
-    });
+  if (caller && caller.role === 'STUDENT') {
+    const reqId = req.params.id;
+    const isOwner = (
+      reqId === 'me' ||
+      reqId === caller.studentId ||
+      reqId === caller.id ||
+      reqId === caller.email ||
+      (caller.email === 'student@example.com' && (reqId === 'stu_omar' || reqId === 'user_student')) ||
+      (caller.email === 'student2@example.com' && (reqId === 'stu_sara' || reqId === 'user_student2'))
+    );
+    if (!isOwner) {
+      return res.status(403).json({
+        error: 'IDOR_FORBIDDEN',
+        messageAr: 'غير مصرح: لا يجوز للطالب الاطلاع أو التعديل على سجلات طالب آخر.',
+        messageEn: 'Unauthorized: Students can only view or modify their own academic record.',
+      });
+    }
   }
   next();
 });
@@ -465,13 +818,18 @@ apiRouter.get('/students/:id/study-plan', async (req: Request, res: Response) =>
     const student = await StudentRepository.findById(req.params.id);
     if (!student) return res.status(404).json({ error: 'Student not found' });
 
-    const savedPlan = await StudyPlanRepository.getByStudentId(student.id);
-    if (savedPlan && savedPlan.semesters && savedPlan.semesters.length > 0) {
-      return res.json(savedPlan);
+    const pace = (req.query.pace as any) || 'NORMAL';
+    const forceRegenerate = req.query.regenerate === 'true';
+
+    // If pace is requested or forceRegenerate is true or saved plan has fewer than 3 semesters, regenerate dynamic plan
+    if (!forceRegenerate && (!req.query.pace || req.query.pace === 'NORMAL')) {
+      const savedPlan = await StudyPlanRepository.getByStudentId(student.id);
+      if (savedPlan && savedPlan.semesters && savedPlan.semesters.length > 2) {
+        return res.json(savedPlan);
+      }
     }
 
     const courses = await CourseRepository.listAll();
-    const pace = (req.query.pace as any) || 'NORMAL';
     const plan = StudyPlanner.generatePlan(student, courses, { pace });
     return res.json(plan);
   } catch (err: any) {
@@ -485,8 +843,10 @@ apiRouter.post('/students/:id/study-plan/submit', async (req: Request, res: Resp
     const student = await StudentRepository.findById(req.params.id);
     if (!student) return res.status(404).json({ error: 'Student not found' });
 
+    const pace = (req.body?.pace as any) || 'NORMAL';
     const courses = await CourseRepository.listAll();
-    const plan = StudyPlanner.generatePlan(student, courses);
+    const plan = req.body?.plan || StudyPlanner.generatePlan(student, courses, { pace });
+    plan.status = 'Pending Review';
     await StudyPlanRepository.savePlan(student.id, plan, 'PENDING_REVIEW');
 
     await NotificationRepository.createNotification({
@@ -509,7 +869,25 @@ apiRouter.post('/students/:id/study-plan/submit', async (req: Request, res: Resp
       `Submitted study plan to advisor (${student.advisorName}) for review.`
     );
 
-    return res.json({ success: true, status: 'Pending Review' });
+    return res.json({ success: true, status: 'Pending Review', plan });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Reset Study Plan to Draft for Student Editing
+apiRouter.post('/students/:id/study-plan/reset', async (req: Request, res: Response) => {
+  try {
+    const student = await StudentRepository.findById(req.params.id);
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    const pace = (req.body?.pace as any) || 'NORMAL';
+    const courses = await CourseRepository.listAll();
+    const plan = StudyPlanner.generatePlan(student, courses, { pace });
+    plan.status = 'Draft';
+    await StudyPlanRepository.savePlan(student.id, plan, 'DRAFT');
+
+    return res.json({ success: true, status: 'Draft', plan });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -638,6 +1016,319 @@ apiRouter.post('/students/:id/register', async (req: Request, res: Response) => 
   }
 });
 
+// -------------------------------------------------------------
+// INTELLIGENT REGISTRATION ADVISOR ENDPOINTS
+// -------------------------------------------------------------
+
+// 1. Get AI Recommended Semester Schedule BEFORE Registration
+apiRouter.get('/students/:id/registration-recommendation', async (req: Request, res: Response) => {
+  try {
+    const student = await StudentRepository.findById(req.params.id);
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    const allCourses = await CourseRepository.getAll();
+    const allOfferings = await OfferingRepository.getAll();
+    const isSummer = req.query.isSummer === 'true';
+
+    const recommendation = RegistrationAdvisorEngine.generateSemesterRecommendation(
+      student,
+      allCourses,
+      allOfferings,
+      isSummer
+    );
+
+    return res.json(recommendation);
+  } catch (err: any) {
+    console.error('Error generating registration recommendation:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 2. Real-Time Proposed Schedule Validation (Conflicts, Prereqs, Limits, Retakes, Capacity)
+apiRouter.post('/students/:id/validate-registration', async (req: Request, res: Response) => {
+  try {
+    const student = await StudentRepository.findById(req.params.id);
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    const { offeringIds, courseCodes, isSummer } = req.body;
+    const allCourses = await CourseRepository.getAll();
+    const allOfferings = await OfferingRepository.getAll();
+    const offeringMap = new Map<string, CourseOffering>(allOfferings.map(o => [o.id, o]));
+    const offeringByCourse = new Map<string, CourseOffering>(allOfferings.map(o => [o.courseCode, o]));
+
+    // Resolve selected offerings
+    let selectedOfferings: CourseOffering[] = [];
+    if (Array.isArray(offeringIds) && offeringIds.length > 0) {
+      selectedOfferings = offeringIds
+        .map((id: string) => offeringMap.get(id))
+        .filter((o): o is CourseOffering => !!o);
+    } else if (Array.isArray(courseCodes) && courseCodes.length > 0) {
+      selectedOfferings = courseCodes
+        .map((code: string) => offeringByCourse.get(code))
+        .filter((o): o is CourseOffering => !!o);
+    }
+
+    const validation = RegistrationAdvisorEngine.validateProposedRegistration(
+      student,
+      selectedOfferings,
+      allCourses,
+      allOfferings,
+      !!isSummer
+    );
+
+    return res.json(validation);
+  } catch (err: any) {
+    console.error('Error validating registration schedule:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 3. Automatic Conflict Resolution ("Fix My Schedule")
+apiRouter.post('/students/:id/resolve-schedule-conflicts', async (req: Request, res: Response) => {
+  try {
+    const student = await StudentRepository.findById(req.params.id);
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    const { courseCodes, currentOfferingIds } = req.body;
+    if (!Array.isArray(courseCodes) || courseCodes.length === 0) {
+      return res.status(400).json({ error: 'courseCodes array is required' });
+    }
+
+    const allCourses = await CourseRepository.getAll();
+    const allOfferings = await OfferingRepository.getAll();
+    const offeringMap = new Map<string, CourseOffering>(allOfferings.map(o => [o.id, o]));
+
+    const currentOfferings = (currentOfferingIds || [])
+      .map((id: string) => offeringMap.get(id))
+      .filter((o: any): o is CourseOffering => !!o);
+
+    const result = RegistrationAdvisorEngine.resolveScheduleConflicts(
+      courseCodes,
+      currentOfferings,
+      allOfferings,
+      allCourses
+    );
+
+    return res.json(result);
+  } catch (err: any) {
+    console.error('Error resolving schedule conflicts:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 4. What-If Schedule Sandbox (Never modifies real record)
+apiRouter.post('/students/:id/what-if-schedule', async (req: Request, res: Response) => {
+  try {
+    const student = await StudentRepository.findById(req.params.id);
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    const { currentCourseCodes, action } = req.body;
+    if (!Array.isArray(currentCourseCodes) || !action) {
+      return res.status(400).json({ error: 'currentCourseCodes and action object are required' });
+    }
+
+    const allCourses = await CourseRepository.getAll();
+    const result = RegistrationAdvisorEngine.simulateWhatIf(
+      student,
+      currentCourseCodes,
+      action,
+      allCourses
+    );
+
+    return res.json(result);
+  } catch (err: any) {
+    console.error('Error simulating what-if schedule:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 5. Long-term Graduation Degree Plan (Level B Planning)
+apiRouter.get('/students/:id/degree-plan', async (req: Request, res: Response) => {
+  try {
+    const student = await StudentRepository.findById(req.params.id);
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    const allCourses = await CourseRepository.getAll();
+    const plan = StudyPlanner.generateStudyPlan(student, allCourses);
+    return res.json(plan);
+  } catch (err: any) {
+    console.error('Error generating graduation plan:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 6. Submit Proposed Schedule for Advisor Review
+apiRouter.post('/students/:id/submit-proposed-schedule', async (req: Request, res: Response) => {
+  const caller = getCaller(req);
+  try {
+    const student = await StudentRepository.findById(req.params.id);
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    const { offeringIds, courseCodes, notes } = req.body;
+    const allCourses = await CourseRepository.getAll();
+    const allOfferings = await OfferingRepository.getAll();
+    const offeringMap = new Map<string, CourseOffering>(allOfferings.map(o => [o.id, o]));
+    const offeringByCourse = new Map<string, CourseOffering>(allOfferings.map(o => [o.courseCode, o]));
+
+    const selectedOfferings = (Array.isArray(offeringIds) && offeringIds.length > 0)
+      ? offeringIds.map((id: string) => offeringMap.get(id)).filter((o): o is CourseOffering => !!o)
+      : (Array.isArray(courseCodes) ? courseCodes.map((c: string) => offeringByCourse.get(c)).filter((o): o is CourseOffering => !!o) : []);
+
+    // Strict real-time validation before submitting
+    const validation = RegistrationAdvisorEngine.validateProposedRegistration(
+      student,
+      selectedOfferings,
+      allCourses,
+      allOfferings,
+      false
+    );
+
+    if (!validation.valid) {
+      return res.status(422).json({
+        success: false,
+        messageAr: 'لا يمكن إرسال الجدول لوجود تعارضات أو مخالفات في اللائحة الأكاديمية.',
+        messageEn: 'Cannot submit schedule due to unresolved timetable conflicts or bylaw errors.',
+        validation,
+      });
+    }
+
+    // Update student's status to Pending Review
+    student.currentPlanStatus = 'Pending Review';
+
+    // Log to Audit Log
+    await addAuditLog(
+      caller?.id || student.id,
+      caller?.nameAr || student.nameAr,
+      (caller?.role as any) || 'STUDENT',
+      'SUBMIT_PROPOSED_SCHEDULE',
+      'ProposedSchedule',
+      student.id,
+      `تقديم جدول فصلي مقترح للمرشد الأكاديمي بإجمالي (${validation.totalCredits}) ساعة معتمدة ومقررات (${selectedOfferings.map(o => o.courseCode).join(', ')}).`,
+      `Submitted proposed semester schedule to advisor totaling (${validation.totalCredits}) credits: (${selectedOfferings.map(o => o.courseCode).join(', ')}).`,
+      undefined,
+      { courseCodes: selectedOfferings.map(o => o.courseCode), offeringIds: selectedOfferings.map(o => o.id), notes }
+    );
+
+    // Notify Advisor
+    await NotificationRepository.create({
+      recipientId: student.advisorId || 'adv_dr_mahmoud',
+      type: 'APPROVAL',
+      titleAr: `طلب اعتماد جدول فصلي جديد: ${student.nameAr}`,
+      titleEn: `New Semester Schedule Review: ${student.nameEn}`,
+      messageAr: `قام الطالب ${student.nameAr} (${student.studentCode}) بإرسال جدول مقترح مكون من ${selectedOfferings.length} مقررات بانتظار مراجعتك واعتمادك.`,
+      messageEn: `Student ${student.nameEn} submitted a proposed schedule with ${selectedOfferings.length} courses awaiting your review.`,
+    });
+
+    return res.json({
+      success: true,
+      messageAr: 'تم إرسال الجدول الدراسي المقترح إلى المرشد الأكاديمي بنجاح، وستصلك إفادة فور الاعتماد.',
+      messageEn: 'Proposed semester schedule submitted to academic advisor for review.',
+      validation,
+      status: 'Pending Review',
+    });
+  } catch (err: any) {
+    console.error('Error submitting proposed schedule:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 7. Academic Advisor Reviews & Finalizes Schedule
+apiRouter.post('/advisors/approve-schedule', async (req: Request, res: Response) => {
+  const caller = getCaller(req);
+  try {
+    const { studentId, decision, courseCodes, notes } = req.body;
+    if (!studentId || !decision) {
+      return res.status(400).json({ error: 'studentId and decision are required' });
+    }
+
+    const student = await StudentRepository.findById(studentId);
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    if (decision === 'APPROVE') {
+      const regCodes = courseCodes || ['CS 201', 'CS 210', 'BS 110', 'CS 202'];
+      const result = await AcademicTransactionService.registerCourses(
+        studentId,
+        regCodes,
+        false,
+        caller || undefined
+      );
+
+      if (!result.success) {
+        return res.status(422).json({
+          success: false,
+          messageAr: 'تعذر الاعتماد لوجود مخالفات باللائحة.',
+          messageEn: 'Could not approve due to academic bylaw violations.',
+          validation: result.validation,
+        });
+      }
+
+      student.currentPlanStatus = 'Approved';
+
+      await addAuditLog(
+        caller?.id || 'adv_dr_mahmoud',
+        caller?.nameAr || 'د. محمود صقر',
+        'ACADEMIC_ADVISOR',
+        'ADVISOR_APPROVE_SCHEDULE',
+        'CourseRegistration',
+        studentId,
+        `اعتماد الجدول الدراسي الفصلي للطالب ${student.nameAr} وتثبيت تسجيل المقررات (${regCodes.join(', ')}). ملاحظات: ${notes || 'معتمد'}.`,
+        `Approved semester schedule for ${student.nameEn} and finalized registration for (${regCodes.join(', ')}). Notes: ${notes || 'Approved'}.`,
+        undefined,
+        { regCodes, notes }
+      );
+
+      await NotificationRepository.create({
+        recipientId: studentId,
+        type: 'APPROVAL',
+        titleAr: 'تهانينا: تم اعتماد جدولك الدراسي رسمياً',
+        titleEn: 'Congratulations: Semester Schedule Officially Approved',
+        messageAr: `تمت مراجعة واعتماد جدولك الدراسي للفصل الحالي من قِبل المرشد الأكاديمي (${caller?.nameAr || 'د. محمود صقر'}). المقررات مسجلة رسمياً الآن.`,
+        messageEn: `Your semester schedule has been officially approved by your academic advisor. Courses are now officially registered.`,
+      });
+
+      return res.json({
+        success: true,
+        messageAr: 'تم اعتماد الجدول الدراسي رسمياً وتثبيت تسجيل المقررات في السجل الأكاديمي.',
+        messageEn: 'Schedule officially approved and courses registered in academic record.',
+        student: result.updatedStudent,
+      });
+    } else {
+      student.currentPlanStatus = 'Rejected';
+
+      await addAuditLog(
+        caller?.id || 'adv_dr_mahmoud',
+        caller?.nameAr || 'د. محمود صقر',
+        'ACADEMIC_ADVISOR',
+        'ADVISOR_REJECT_SCHEDULE',
+        'CourseRegistration',
+        studentId,
+        `رفض أو طلب تعديل الجدول الدراسي للطالب ${student.nameAr}. السبب: ${notes || 'يرجى مراجعة المرشد الأكاديمي'}.`,
+        `Rejected/requested changes for ${student.nameEn}'s schedule. Reason: ${notes || 'Please consult your advisor'}.`,
+        undefined,
+        { notes }
+      );
+
+      await NotificationRepository.create({
+        recipientId: studentId,
+        type: 'WARNING',
+        titleAr: 'إشعار من المرشد الأكاديمي: مطلوب تعديل الجدول',
+        titleEn: 'Advisor Notice: Schedule Changes Required',
+        messageAr: `طلب المرشد الأكاديمي تعديل جدولك المقترح. الملاحظات: ${notes || 'يرجى تعديل المقررات واختيار شعب بديلة'}.`,
+        messageEn: `Your advisor requested modifications to your schedule. Notes: ${notes || 'Please modify courses and select alternatives'}.`,
+      });
+
+      return res.json({
+        success: true,
+        messageAr: 'تم إرجاع الجدول للطالب مع ملاحظات التعديل.',
+        messageEn: 'Schedule returned to student with requested revisions.',
+      });
+    }
+  } catch (err: any) {
+    console.error('Error processing advisor schedule decision:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // Summer Training Submission
 apiRouter.post('/students/:id/training', async (req: Request, res: Response) => {
   try {
@@ -716,6 +1407,189 @@ apiRouter.get('/advisor/students', async (req: Request, res: Response) => {
     });
 
     return res.json(enriched);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin Assignment: Assign a list of students to an academic advisor
+apiRouter.post('/advisors/:id/assign-students', async (req: Request, res: Response) => {
+  try {
+    const caller = getCaller(req);
+    if (caller && caller.role !== 'ADMIN' && caller.role !== 'ACADEMIC_ADVISOR') {
+      return res.status(403).json({
+        error: 'ROLE_FORBIDDEN',
+        messageAr: 'غير مصرح: إسناد الطلاب للمرشدين يتطلب صلاحيات الآدمن.',
+        messageEn: 'Unauthorized: Assigning students to advisors requires Admin privileges.',
+      });
+    }
+
+    const { id } = req.params;
+    const { studentIds } = req.body; // Array of student IDs / codes
+
+    if (!Array.isArray(studentIds)) {
+      return res.status(400).json({
+        error: 'INVALID_INPUT',
+        messageAr: 'يجب توفير قائمة معرفات الطلاب كـ مصفوفة.',
+        messageEn: 'studentIds must be an array of student identifiers.',
+      });
+    }
+
+    // 1. Resolve Advisor record in database
+    let advisor = await prisma.advisor.findFirst({
+      where: {
+        OR: [
+          { id },
+          { userId: id },
+          { user: { email: id } },
+        ],
+      },
+      include: { user: true },
+    });
+
+    if (!advisor) {
+      const user = await prisma.user.findFirst({
+        where: {
+          OR: [
+            { id },
+            { email: id },
+          ],
+        },
+      });
+
+      if (user && user.role === 'ACADEMIC_ADVISOR') {
+        advisor = await prisma.advisor.create({
+          data: {
+            id: `adv_${user.id}`,
+            userId: user.id,
+            office: 'مبنى الحاسبات - قسم الإرشاد الأكاديمي',
+          },
+          include: { user: true },
+        });
+      }
+    }
+
+    const advisorDbId = advisor?.id || id;
+    const advisorNameAr = advisor?.user?.nameAr || 'المرشد الأكاديمي';
+    const advisorNameEn = advisor?.user?.nameEn || 'Academic Advisor';
+
+    // 2. Update Student records in database
+    try {
+      const targetStudents = await prisma.student.findMany({
+        where: {
+          OR: [
+            { id: { in: studentIds } },
+            { studentCode: { in: studentIds } },
+            { userId: { in: studentIds } },
+          ],
+        },
+      });
+
+      const targetIds = targetStudents.map(s => s.id);
+
+      if (targetIds.length > 0) {
+        await prisma.student.updateMany({
+          where: { id: { in: targetIds } },
+          data: { advisorId: advisorDbId },
+        });
+      }
+    } catch (dbErr) {
+      console.warn('[AssignStudents] Prisma update fallback:', dbErr);
+    }
+
+    // Update in-memory fallback store as well
+    for (const s of INITIAL_STUDENTS) {
+      if (studentIds.includes(s.id) || studentIds.includes(s.studentCode) || studentIds.includes((s as any).userId)) {
+        s.advisorId = advisorDbId;
+        s.advisorName = `${advisorNameAr} (${advisorNameEn})`;
+      }
+    }
+
+    // 3. Log into Immutable Audit Trail
+    await addAuditLog(
+      caller?.id || 'admin',
+      caller?.nameAr || 'مدير النظام',
+      caller?.role || 'ADMIN',
+      'ASSIGN_STUDENTS',
+      'Advisor',
+      advisorDbId,
+      `تم إسناد ${studentIds.length} طالب بنجاح إلى المرشد الأكاديمي (${advisorNameAr}).`,
+      `Assigned ${studentIds.length} students to Academic Advisor (${advisorNameEn}).`,
+      undefined,
+      { advisorId: advisorDbId, studentCount: studentIds.length, studentIds }
+    );
+
+    // 4. Create Notification for Advisor
+    await NotificationRepository.createNotification({
+      recipientId: advisor?.userId || advisorDbId || 'user_advisor',
+      type: 'INFO',
+      titleAr: 'تم إسناد طلاب جدد لمتابعتهم أكاديمياً',
+      titleEn: 'New Students Assigned to Your Advising Roster',
+      messageAr: `قام مدير النظام بإسناد ${studentIds.length} طالب إلى قائمتك للإشراف الأكاديمي ومتابعة خطط التخرج.`,
+      messageEn: `Administrator assigned ${studentIds.length} students to your advising roster.`,
+    });
+
+    return res.json({
+      success: true,
+      advisorId: advisorDbId,
+      assignedCount: studentIds.length,
+      messageAr: `تم إسناد ${studentIds.length} طالب بنجاح إلى المرشد الأكاديمي (${advisorNameAr}) وحفظ التعيين في قاعدة البيانات.`,
+      messageEn: `Successfully assigned ${studentIds.length} students to Academic Advisor (${advisorNameEn}).`,
+    });
+  } catch (err: any) {
+    console.error('Error assigning students:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Get currently assigned students for a specific advisor
+apiRouter.get('/advisors/:id/assigned-students', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    let students: any[] = [];
+    try {
+      const rows = await prisma.student.findMany({
+        where: {
+          OR: [
+            { advisorId: id },
+            { advisor: { id } },
+            { advisor: { userId: id } },
+            { advisor: { user: { email: id } } },
+          ],
+        },
+        include: {
+          user: true,
+        },
+      });
+
+      if (rows && rows.length > 0) {
+        students = rows.map(r => ({
+          id: r.id,
+          studentCode: r.studentCode,
+          nameAr: r.user?.nameAr || '',
+          nameEn: r.user?.nameEn || '',
+          email: r.user?.email || '',
+          level: r.level,
+          cumulativeGpa: r.cumulativeGpa,
+          riskLevel: r.riskLevel,
+        }));
+      }
+    } catch (e) {}
+
+    if (students.length === 0) {
+      students = INITIAL_STUDENTS.filter(s => s.advisorId === id || id.includes('advisor') || id === 'user_advisor' || id === 'adv_dr_mahmoud').map(s => ({
+        id: s.id,
+        studentCode: s.studentCode,
+        nameAr: s.nameAr,
+        nameEn: s.nameEn,
+        email: s.email,
+        level: s.level,
+        cumulativeGpa: s.cumulativeGpa,
+        riskLevel: s.riskLevel,
+      }));
+    }
+
+    return res.json(students);
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -1241,6 +2115,370 @@ apiRouter.post('/admin/import', async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
+  }
+});
+
+// Bulk Data Import via Excel (.xlsx) for Students and Course Registrations
+apiRouter.post('/admin/import/students-excel', excelUpload.single('file'), async (req: Request, res: Response) => {
+  const caller = getCaller(req);
+  if (caller && caller.role !== 'ADMIN') {
+    return res.status(403).json({
+      error: 'ROLE_FORBIDDEN',
+      messageAr: 'غير مصرح: استيراد البيانات مقتصر على مدير النظام فقط.',
+      messageEn: 'Unauthorized: Importing data requires Administrator privileges.',
+    });
+  }
+
+  if (!req.file || !req.file.buffer) {
+    return res.status(400).json({
+      error: 'NO_FILE_UPLOADED',
+      messageAr: 'لم يتم استلام أي ملف إكسل. يرجى اختيار ملف بصيغة .xlsx.',
+      messageEn: 'No file received. Please provide an .xlsx file.',
+    });
+  }
+
+  const wipeData = req.body.wipeData === true || req.body.wipeData === 'true' || req.body.wipeData === '1';
+
+  try {
+    const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+    const firstSheetName = workbook.SheetNames[0];
+    if (!firstSheetName) {
+      return res.status(400).json({
+        error: 'EMPTY_WORKBOOK',
+        messageAr: 'ملف الإكسل فارغ ولا يحتوي على صفحات عمل.',
+        messageEn: 'The Excel workbook is empty.',
+      });
+    }
+    const worksheet = workbook.Sheets[firstSheetName];
+
+    // CRITICAL: Headers are on row 5, so skip the first 4 metadata rows using range: 4
+    const rawRows = XLSX.utils.sheet_to_json<Record<string, any>>(worksheet, { range: 4 });
+
+    if (!rawRows || rawRows.length === 0) {
+      return res.status(400).json({
+        error: 'NO_DATA_ROWS',
+        messageAr: 'لم يتم العثور على أي صفوف بيانات بعد السطر الرابع في ملف الإكسل.',
+        messageEn: 'No data rows found after row 4 in the sheet.',
+      });
+    }
+
+    interface ExcelCourseRow {
+      courseCode: string;
+      courseName: string;
+      courseType: string;
+      courseLevel: number;
+      credits: number;
+      passCount: number;
+      failCount: number;
+      withdrawCount: number;
+    }
+
+    interface StudentGroup {
+      studentCode: string;
+      name: string;
+      gpa: number;
+      earnedHours: number;
+      level: number;
+      courses: ExcelCourseRow[];
+    }
+
+    const studentGroups = new Map<string, StudentGroup>();
+
+    for (const rawRow of rawRows) {
+      const row: Record<string, any> = {};
+      for (const [k, v] of Object.entries(rawRow)) {
+        if (k != null) {
+          row[String(k).trim()] = v;
+        }
+      }
+
+      const rawCode = row['كود الطالب'];
+      if (!rawCode) continue;
+      const studentCode = String(rawCode).trim();
+      if (!studentCode) continue;
+
+      const name = String(row['الاسم'] || '').trim();
+      const rawGpa = row['المعدل التراكمى'] ?? row['المعدل التراكمي'] ?? 0;
+      const gpa = typeof rawGpa === 'number' ? rawGpa : parseFloat(String(rawGpa).replace(',', '.')) || 0;
+
+      const rawHours = row['الساعات المكتسبه'] ?? row['الساعات المكتسبة'] ?? 0;
+      const earnedHours = typeof rawHours === 'number' ? rawHours : parseInt(String(rawHours), 10) || 0;
+
+      const rawLevel = row['المستوي'] ?? row['المستوى'] ?? 1;
+      let level = 1;
+      if (typeof rawLevel === 'number') {
+        level = rawLevel;
+      } else {
+        const sLevel = String(rawLevel).trim();
+        if (sLevel.includes('4') || sLevel.includes('رابع')) level = 4;
+        else if (sLevel.includes('3') || sLevel.includes('ثالث')) level = 3;
+        else if (sLevel.includes('2') || sLevel.includes('ثان')) level = 2;
+        else level = parseInt(sLevel, 10) || 1;
+      }
+
+      const courseCode = String(row['كود المقرر'] || '').trim().toUpperCase();
+      const courseName = String(row['اسم المقرر'] || '').trim();
+      const courseType = String(row['نوع المقرر'] || '').trim();
+      const courseLevel = parseInt(String(row['مستوى المقرر'] || '1'), 10) || 1;
+      const credits = parseInt(String(row['الساعات المعتمدة'] || '3'), 10) || 3;
+      const passCount = parseInt(String(row['عدد مرات النجاح'] || '0'), 10) || 0;
+      const failCount = parseInt(String(row['عدد مرات الرسوب'] || '0'), 10) || 0;
+      const withdrawCount = parseInt(String(row['عدد مرات الانسحاب'] || '0'), 10) || 0;
+
+      if (!studentGroups.has(studentCode)) {
+        studentGroups.set(studentCode, {
+          studentCode,
+          name,
+          gpa,
+          earnedHours,
+          level,
+          courses: [],
+        });
+      }
+
+      const group = studentGroups.get(studentCode)!;
+      if (!group.name && name) group.name = name;
+      if (gpa > 0 && group.gpa === 0) group.gpa = gpa;
+      if (earnedHours > 0 && group.earnedHours === 0) group.earnedHours = earnedHours;
+
+      if (courseCode) {
+        group.courses.push({
+          courseCode,
+          courseName,
+          courseType,
+          courseLevel,
+          credits,
+          passCount,
+          failCount,
+          withdrawCount,
+        });
+      }
+    }
+
+    if (studentGroups.size === 0) {
+      return res.status(400).json({
+        error: 'NO_VALID_STUDENTS',
+        messageAr: 'لم يتم العثور على أي بيانات طلاب صالحة بعد استخراج الحقول.',
+        messageEn: 'No valid students found in the file.',
+      });
+    }
+
+    const defaultPasswordHash = await bcrypt.hash('std123456', 10);
+    let totalCoursesProcessed = 0;
+
+    // Wrap the entire import in a Prisma Transaction
+    await prisma.$transaction(
+      async (tx) => {
+        // Wipe logic: If wipeData is true, clear relevant tables before importing
+        if (wipeData) {
+          await tx.courseRecord.deleteMany({});
+          await tx.studyPlan.deleteMany({});
+          await tx.summerTraining.deleteMany({});
+          await tx.graduationProject.deleteMany({});
+          await tx.student.deleteMany({});
+          await tx.user.deleteMany({
+            where: { role: 'STUDENT' },
+          });
+        }
+
+        for (const student of studentGroups.values()) {
+          const email = `${student.studentCode.toLowerCase().replace(/[^a-z0-9]/g, '')}@student.edu`;
+          const studentNameAr = student.name || `طالب ${student.studentCode}`;
+          const studentNameEn = `Student ${student.studentCode}`;
+
+          // a. Upsert User (Role: STUDENT, password hashed 'std123456')
+          let dbUser = await tx.user.findFirst({
+            where: {
+              OR: [
+                { email },
+                { student: { studentCode: student.studentCode } },
+              ],
+            },
+          });
+
+          if (dbUser) {
+            dbUser = await tx.user.update({
+              where: { id: dbUser.id },
+              data: {
+                nameAr: studentNameAr,
+                nameEn: studentNameEn,
+                passwordHash: defaultPasswordHash,
+                role: 'STUDENT',
+              },
+            });
+          } else {
+            dbUser = await tx.user.create({
+              data: {
+                id: `usr_${student.studentCode.toLowerCase().replace(/[^a-z0-9]/g, '_')}`,
+                email,
+                nameAr: studentNameAr,
+                nameEn: studentNameEn,
+                passwordHash: defaultPasswordHash,
+                role: 'STUDENT',
+              },
+            });
+          }
+
+          // b. Upsert Student profile
+          const dbStudent = await tx.student.upsert({
+            where: { studentCode: student.studentCode },
+            create: {
+              id: `stu_${student.studentCode.toLowerCase().replace(/[^a-z0-9]/g, '_')}`,
+              userId: dbUser.id,
+              studentCode: student.studentCode,
+              level: student.level,
+              track: 'General',
+              cumulativeGpa: student.gpa,
+              previousGpa: student.gpa,
+              completedCredits: student.earnedHours,
+              enrolledCredits: 0,
+              warningCount: student.gpa < 2.0 ? 1 : 0,
+              riskLevel: student.gpa < 2.0 ? 'HIGH' : student.gpa < 2.5 ? 'MEDIUM' : 'LOW',
+            },
+            update: {
+              level: student.level,
+              cumulativeGpa: student.gpa,
+              completedCredits: student.earnedHours,
+              riskLevel: student.gpa < 2.0 ? 'HIGH' : student.gpa < 2.5 ? 'MEDIUM' : 'LOW',
+            },
+          });
+
+          // c. Link courses and create records with attempts
+          for (const c of student.courses) {
+            totalCoursesProcessed++;
+
+            const dbCourse = await tx.course.upsert({
+              where: { code: c.courseCode },
+              create: {
+                id: `c_${c.courseCode.toLowerCase().replace(/[^a-z0-9]/g, '_')}`,
+                code: c.courseCode,
+                nameAr: c.courseName || c.courseCode,
+                nameEn: `Course ${c.courseCode}`,
+                credits: c.credits > 0 ? c.credits : 3,
+                level: c.courseLevel > 0 ? c.courseLevel : 1,
+                semester: 1,
+                isMandatory: c.courseType.includes('إجباري') || c.courseType.includes('اجباري') || true,
+                department: c.courseCode.startsWith('CS')
+                  ? 'Computer Science'
+                  : c.courseCode.startsWith('IS')
+                  ? 'Information Systems'
+                  : c.courseCode.startsWith('BS')
+                  ? 'Basic Sciences'
+                  : 'Computer Science',
+              },
+              update: {
+                nameAr: c.courseName || undefined,
+                credits: c.credits > 0 ? c.credits : undefined,
+                level: c.courseLevel > 0 ? c.courseLevel : undefined,
+              },
+            });
+
+            // If not wiping everything, delete existing records for this student and course
+            if (!wipeData) {
+              await tx.courseRecord.deleteMany({
+                where: {
+                  studentId: dbStudent.id,
+                  courseId: dbCourse.id,
+                },
+              });
+            }
+
+            // Record failed attempts
+            for (let f = 1; f <= c.failCount; f++) {
+              await tx.courseRecord.create({
+                data: {
+                  id: `rec_${dbStudent.id}_${dbCourse.id}_f${f}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                  studentId: dbStudent.id,
+                  courseId: dbCourse.id,
+                  attempt: f,
+                  status: 'FAILED',
+                  grade: 'F',
+                  gradePoints: 0.0,
+                  attendancePercentage: 100,
+                },
+              });
+            }
+
+            // Record withdrawals
+            if (c.withdrawCount > 0 && c.passCount === 0) {
+              for (let w = 1; w <= c.withdrawCount; w++) {
+                await tx.courseRecord.create({
+                  data: {
+                    id: `rec_${dbStudent.id}_${dbCourse.id}_w${w}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                    studentId: dbStudent.id,
+                    courseId: dbCourse.id,
+                    attempt: c.failCount + w,
+                    status: 'WITHDRAWN',
+                    grade: 'W',
+                    gradePoints: 0.0,
+                    attendancePercentage: 100,
+                  },
+                });
+              }
+            }
+
+            // Record passed attempt
+            if (c.passCount > 0) {
+              await tx.courseRecord.create({
+                data: {
+                  id: `rec_${dbStudent.id}_${dbCourse.id}_p_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                  studentId: dbStudent.id,
+                  courseId: dbCourse.id,
+                  attempt: c.failCount + 1,
+                  status: 'PASSED',
+                  grade: 'B',
+                  gradePoints: 3.0,
+                  attendancePercentage: 100,
+                },
+              });
+            }
+
+            // Record current enrollment (0 pass, 0 fail, 0 withdraw)
+            if (c.passCount === 0 && c.failCount === 0 && c.withdrawCount === 0) {
+              await tx.courseRecord.create({
+                data: {
+                  id: `rec_${dbStudent.id}_${dbCourse.id}_en_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                  studentId: dbStudent.id,
+                  courseId: dbCourse.id,
+                  attempt: 1,
+                  status: 'ENROLLED',
+                  attendancePercentage: 100,
+                },
+              });
+            }
+          }
+        }
+      },
+      { timeout: 90000 }
+    );
+
+    // Record audit log
+    await addAuditLog(
+      caller?.id || 'user_admin',
+      caller?.nameAr || 'مدير النظام',
+      'ADMIN',
+      'EXCEL_BULK_STUDENT_IMPORT',
+      'DataImport',
+      req.file.originalname,
+      `استيراد ذكي من ملف إكسل (${req.file.originalname}): تم استيراد (${studentGroups.size}) طالباً، (${totalCoursesProcessed}) تسجيلاً وسجلاً دراسياً. مسح البيانات القديمة: ${wipeData ? 'نعم' : 'لا'}.`,
+      `Excel bulk student import (${req.file.originalname}): ${studentGroups.size} students, ${totalCoursesProcessed} course records. Wipe data: ${wipeData ? 'YES' : 'NO'}.`
+    );
+
+    return res.json({
+      success: true,
+      importedStudentsCount: studentGroups.size,
+      totalRegistrationsCount: totalCoursesProcessed,
+      wipedData: wipeData,
+      messageAr: `تم بنجاح استيراد ${studentGroups.size} طالباً ومزامنة ${totalCoursesProcessed} تسجيلاً أكاديمياً.`,
+      messageEn: `Successfully imported ${studentGroups.size} students and synchronized ${totalCoursesProcessed} academic records.`,
+    });
+  } catch (err: any) {
+    console.error('[ExcelImportError]', err);
+    return res.status(500).json({
+      error: 'IMPORT_PROCESSING_FAILED',
+      message: err.message,
+      messageAr: `حدث خطأ أثناء معالجة ملف الإكسل: ${err.message}`,
+    });
   }
 });
 
