@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: smart-academic-advisor
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm install && npx prisma generate && npm run build
+    startCommand: npx tsx server.ts
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: smart-academic-db
+          property: connectionString
+
+databases:
+  - name: smart-academic-db
+    plan: free
+    region: frankfurt
+    databaseName: smart_academic_db
+    user: advisor_user

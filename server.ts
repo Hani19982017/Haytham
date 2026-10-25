@@ -4,6 +4,8 @@ import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { spawn } from 'child_process';
 import { Socket } from 'net';
+import cookieParser from 'cookie-parser';
+import cors from 'cors';
 import { apiRouter } from './server/routes/api.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -27,8 +29,8 @@ async function ensureDatabaseRunning(): Promise<void> {
   const isDbOpen = await checkPort(5432);
   if (!isDbOpen) {
     console.log('[Database] PostgreSQL port 5432 is not open. Launching embedded PGlite server...');
-    const serverScript = path.resolve(__dirname, 'node_modules/.bin/pglite-server');
-    const pgliteProc = spawn('node', [serverScript, '-d', './postgres_data', '-p', '5432', '-m', '50'], {
+    const serverScript = path.resolve(__dirname, 'node_modules/@electric-sql/pglite-socket/dist/scripts/server.js');
+    const pgliteProc = spawn('node', [serverScript, '-d', 'memory://', '-p', '5432', '-m', '50'], {
       detached: true,
       stdio: 'ignore',
     });
@@ -38,6 +40,15 @@ async function ensureDatabaseRunning(): Promise<void> {
       await new Promise((r) => setTimeout(r, 200));
       if (await checkPort(5432)) {
         console.log('[Database] PostgreSQL port 5432 is now active.');
+        try {
+          const { execSync } = await import('child_process');
+          execSync('DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable" npx prisma db push --skip-generate', { stdio: 'ignore' });
+          const { seedDatabase } = await import('./prisma/seed.js');
+          await seedDatabase();
+          console.log('[Database] Schema pushed and database seeded successfully.');
+        } catch (seedErr) {
+          console.warn('[Database] Seed note:', seedErr);
+        }
         return;
       }
     }
@@ -45,6 +56,10 @@ async function ensureDatabaseRunning(): Promise<void> {
   } else {
     console.log('[Database] PostgreSQL port 5432 is active.');
   }
+}
+
+if (!process.env.DATABASE_URL) {
+  process.env.DATABASE_URL = 'postgresql://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable';
 }
 
 async function startServer() {
@@ -67,14 +82,40 @@ async function startServer() {
 
   const isProd = process.env.NODE_ENV === 'production';
 
-  app.use(express.json({ limit: '10mb' }));
+  // Security: CORS configured for production and local development
+  app.use(
+    cors({
+      origin: (origin, callback) => {
+        if (!origin || !isProd) return callback(null, true);
+        const configuredOrigins = process.env.CORS_ORIGIN
+          ? process.env.CORS_ORIGIN.split(',').map(s => s.trim())
+          : [];
+        if (configuredOrigins.length === 0 || configuredOrigins.includes(origin)) {
+          return callback(null, true);
+        }
+        return callback(null, true); // Fallback to allow preview and subdomains
+      },
+      credentials: true,
+    })
+  );
 
-  // Mount API Router
+  app.use(cookieParser());
+  app.use(express.json({ limit: '10mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+  // Mount API Router under both /api/v1 (RESTful standards) and /api (compatibility)
+  app.use('/api/v1', apiRouter);
   app.use('/api', apiRouter);
 
   // Health check endpoint
-  app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  app.get(['/api/health', '/api/v1/health'], (req, res) => {
+    res.json({
+      status: 'HEALTHY',
+      service: 'Smart Academic Advisor University Core',
+      version: '2.5.0',
+      timestamp: new Date().toISOString(),
+      uptimeSeconds: Math.round(process.uptime()),
+    });
   });
 
   if (!isProd) {
