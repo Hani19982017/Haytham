@@ -116,11 +116,34 @@ export class StudyPlanRepository {
             ...(advisorNotes !== undefined && { advisorNotes }),
           },
         });
+      } else {
+        await client.studyPlan.create({
+          data: {
+            id: `plan_${studentId}_${Date.now()}`,
+            studentId,
+            status,
+            planDataJson: '[]',
+            ...(advisorNotes !== undefined && { advisorNotes }),
+          },
+        });
       }
     } catch {
       const match = INITIAL_STUDY_PLANS.find(p => p.studentId === studentId);
+      const mappedStatus = (status === 'APPROVED' ? 'Approved' : status === 'PENDING_REVIEW' ? 'Pending Review' : status === 'REJECTED' ? 'Rejected' : 'Draft') as PlanStatus;
       if (match) {
-        match.status = (status === 'APPROVED' ? 'Approved' : status === 'PENDING_REVIEW' ? 'Pending Review' : 'Draft') as PlanStatus;
+        match.status = mappedStatus;
+      } else {
+        INITIAL_STUDY_PLANS.push({
+          id: `plan_${studentId}_${Date.now()}`,
+          studentId,
+          status: mappedStatus,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          semesters: [],
+          expectedGraduationSemesterAr: 'ربيع 2027',
+          expectedGraduationSemesterEn: 'Spring 2027',
+          totalPlannedCredits: 0,
+        });
       }
     }
   }
