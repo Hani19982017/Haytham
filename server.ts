@@ -25,7 +25,29 @@ function checkPort(port: number, host = '127.0.0.1'): Promise<boolean> {
   });
 }
 
+const hasCustomDatabaseUrl = Boolean(process.env.DATABASE_URL);
+if (!process.env.DATABASE_URL) {
+  process.env.DATABASE_URL = 'postgresql://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable';
+}
+
 async function ensureDatabaseRunning(): Promise<void> {
+  const dbUrl = process.env.DATABASE_URL;
+  const isRemote = dbUrl && !dbUrl.includes('127.0.0.1') && !dbUrl.includes('localhost');
+  
+  if (isRemote) {
+    console.log('[Database] Remote PostgreSQL DATABASE_URL detected. Connecting directly to cloud database.');
+    return;
+  }
+
+  // In production (e.g. Render / Cloud), never spawn embedded PGlite subprocess to stay within 512MB RAM limit
+  if (process.env.NODE_ENV === 'production') {
+    if (!hasCustomDatabaseUrl) {
+      console.warn('[Database] WARNING: DATABASE_URL environment variable is missing on Render. Please configure DATABASE_URL in Environment.');
+    }
+    console.log('[Database] Production environment detected. Skipping local embedded PGlite server.');
+    return;
+  }
+
   const isDbOpen = await checkPort(5432);
   if (!isDbOpen) {
     console.log('[Database] PostgreSQL port 5432 is not open. Launching embedded PGlite server...');
@@ -56,10 +78,6 @@ async function ensureDatabaseRunning(): Promise<void> {
   } else {
     console.log('[Database] PostgreSQL port 5432 is active.');
   }
-}
-
-if (!process.env.DATABASE_URL) {
-  process.env.DATABASE_URL = 'postgresql://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable';
 }
 
 async function startServer() {
