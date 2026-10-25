@@ -233,20 +233,20 @@ export const AdvisorDashboard: React.FC<AdvisorDashboardProps> = ({ currentTab, 
           <table className="w-full text-right text-xs">
             <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200">
               <tr>
-                <th className="px-4 py-3">{t('الطالب والكود', 'Student & ID')}</th>
-                <th className="px-4 py-3">{t('المستوى والمسار', 'Level & Track')}</th>
-                <th className="px-4 py-3">{t('المعدل التراكمي', 'Cumulative GPA')}</th>
-                <th className="px-4 py-3">{t('الإنذارات', 'Warnings')}</th>
-                <th className="px-4 py-3">{t('مستوى الخطر', 'Risk Level')}</th>
+                <th className="px-4 py-3 whitespace-nowrap">{t('الطالب والكود', 'Student & ID')}</th>
+                <th className="px-4 py-3 whitespace-nowrap">{t('المستوى والمسار', 'Level & Track')}</th>
+                <th className="px-4 py-3 text-center whitespace-nowrap">{t('المعدل التراكمي', 'Cumulative GPA')}</th>
+                <th className="px-4 py-3 text-center whitespace-nowrap">{t('الإنذارات', 'Warnings')}</th>
+                <th className="px-4 py-3 text-center whitespace-nowrap">{t('مستوى الخطر', 'Risk Level')}</th>
                 <th className="px-4 py-3">{t('أبرز أسباب الخطر', 'Top Diagnostic Reason')}</th>
-                <th className="px-4 py-3">{t('حالة الخطة', 'Plan Status')}</th>
-                <th className="px-4 py-3 text-center">{t('الإجراء', 'Action')}</th>
+                <th className="px-4 py-3 text-center whitespace-nowrap">{t('حالة الخطة', 'Plan Status')}</th>
+                <th className="px-4 py-3 text-center whitespace-nowrap">{t('الإجراء', 'Action')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.map(student => (
                 <tr key={student.id} className="hover:bg-slate-50 transition">
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3 whitespace-nowrap">
                     <div className="font-bold text-slate-900">
                       {language === 'ar' ? student.nameAr : student.nameEn}
                     </div>
@@ -254,29 +254,32 @@ export const AdvisorDashboard: React.FC<AdvisorDashboardProps> = ({ currentTab, 
                       {student.studentCode}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-slate-600">
+                  <td className="px-4 py-3 text-slate-600 whitespace-nowrap">
                     <div>{t(`المستوى ${student.level}`, `Level ${student.level}`)}</div>
                     <span className="text-[10px] text-slate-400">{student.track}</span>
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
                     <span
                       className={`font-bold text-sm ${
-                        student.cumulativeGpa < 2.0 ? 'text-rose-600' : 'text-slate-900'
+                        student.cumulativeGpa < 2.0 ? 'text-rose-600 font-extrabold' : 'text-slate-900'
                       }`}
                     >
                       {student.cumulativeGpa.toFixed(2)}
                     </span>
                   </td>
-                  <td className="px-4 py-3 font-bold">
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
                     {student.warningCount > 0 ? (
-                      <span className="text-rose-600 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
-                        {student.warningCount} {t('إنذار', 'warn')}
+                      <span className="inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-50 text-rose-600 border border-rose-200 shadow-2xs whitespace-nowrap">
+                        <span>{student.warningCount}</span>
+                        <span>{t('إنذار', 'warn')}</span>
                       </span>
                     ) : (
-                      <span className="text-slate-400">0</span>
+                      <span className="inline-flex items-center justify-center px-2 py-0.5 rounded-full text-xs font-medium text-slate-400 bg-slate-100 border border-slate-200 whitespace-nowrap">
+                        0
+                      </span>
                     )}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
                     <span
                       className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${
                         riskBadge[student.riskLevel] || 'bg-slate-100'
@@ -288,9 +291,9 @@ export const AdvisorDashboard: React.FC<AdvisorDashboardProps> = ({ currentTab, 
                   <td className="px-4 py-3 text-slate-600 max-w-xs truncate">
                     {student.riskReasons[0] || t('أداء مستقر', 'Stable')}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
                     <span
-                      className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
+                      className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold ${
                         student.currentPlanStatus === 'Approved'
                           ? 'bg-emerald-50 text-emerald-700'
                           : student.currentPlanStatus === 'Pending Review'
@@ -301,7 +304,7 @@ export const AdvisorDashboard: React.FC<AdvisorDashboardProps> = ({ currentTab, 
                       {student.currentPlanStatus}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-center">
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
                     <button
                       onClick={() => setSelectedStudent(student)}
                       className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs transition cursor-pointer"
