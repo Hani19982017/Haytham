@@ -31,3 +31,94 @@
   background: #94a3b8;
 }
 
+/* Print optimizations for official academic transcripts & slips */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 12mm 15mm;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    font-size: 11pt !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Hide navigation, sidebar, headers, controls, and action buttons */
+  header,
+  aside,
+  nav,
+  button,
+  .no-print,
+  input,
+  select,
+  textarea {
+    display: none !important;
+  }
+
+  /* Unfold modal wrappers so printable content takes the entire page */
+  .fixed.inset-0 {
+    position: static !important;
+    background: transparent !important;
+    backdrop-filter: none !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    display: block !important;
+  }
+
+  .bg-slate-900\/60,
+  .bg-slate-900\/50,
+  .bg-slate-900\/70 {
+    background: transparent !important;
+  }
+
+  .max-w-3xl,
+  .max-w-2xl,
+  .max-w-4xl,
+  .max-w-5xl,
+  .max-w-xl {
+    max-width: 100% !important;
+    width: 100% !important;
+  }
+
+  .max-h-\[90vh\],
+  .max-h-\[85vh\],
+  .max-h-\[75vh\],
+  .overflow-y-auto {
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  .shadow-2xl,
+  .shadow-xl,
+  .shadow-lg,
+  .shadow-md,
+  .shadow-sm,
+  .shadow-xs {
+    box-shadow: none !important;
+    border: none !important;
+  }
+
+  /* Ensure official document tables look crisp with sharp borders */
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    page-break-inside: auto;
+  }
+
+  tr {
+    page-break-inside: avoid;
+    page-break-after: auto;
+  }
+
+  thead {
+    display: table-header-group;
+  }
+
+  th, td {
+    border-color: #cbd5e1 !important;
+  }
+}
+

@@ -3,6 +3,8 @@ import { useAuth } from '../../context/AuthContext.js';
 import { useLanguage } from '../../context/LanguageContext.js';
 import { api } from '../../services/api.js';
 import { AcademicRuleConfig, AuditLogItem, Course, CourseOffering, Student } from '../../types/index.js';
+import { UserManagementView } from './UserManagementView.js';
+import { DataImportView } from './DataImportView.js';
 import {
   Sliders,
   BookOpen,
@@ -33,10 +35,12 @@ interface AdminDashboardProps {
   onNavigateTab?: (tab: string) => void;
 }
 
-type AdminTab = 'OVERVIEW' | 'COURSES' | 'OFFERINGS' | 'RULES' | 'IMPORT' | 'AUDIT';
+type AdminTab = 'OVERVIEW' | 'USERS' | 'COURSES' | 'OFFERINGS' | 'RULES' | 'IMPORT' | 'AUDIT';
 
 const mapTabFromProp = (tab?: string): AdminTab => {
   switch (tab) {
+    case 'admin-users':
+      return 'USERS';
     case 'admin-courses':
       return 'COURSES';
     case 'admin-offerings':
@@ -72,6 +76,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentTab, onNa
       switch (tab) {
         case 'OVERVIEW':
           onNavigateTab('admin-dashboard');
+          break;
+        case 'USERS':
+          onNavigateTab('admin-users');
           break;
         case 'COURSES':
           onNavigateTab('admin-courses');
@@ -342,6 +349,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentTab, onNa
           >
             <LayoutDashboard className="w-3.5 h-3.5" />
             <span>{t('نظرة عامة على النظام', 'System Overview')}</span>
+          </button>
+
+          <button
+            onClick={() => handleSelectTab('USERS')}
+            className={`px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1.5 ${
+              activeAdminTab === 'USERS'
+                ? 'bg-white text-indigo-600 shadow-xs font-bold'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Users className="w-3.5 h-3.5 text-indigo-600" />
+            <span>{t('إدارة المستخدمين', 'User Management')}</span>
           </button>
 
           <button
@@ -699,7 +718,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentTab, onNa
       )}
 
       {/* ============================================================= */}
-      {/* 2. COURSES CATALOG TAB (دليل المقررات والمتطلبات) */}
+      {/* 2. USER MANAGEMENT TAB (إدارة المستخدمين) */}
+      {/* ============================================================= */}
+      {activeAdminTab === 'USERS' && <UserManagementView />}
+
+      {/* ============================================================= */}
+      {/* 3. COURSES CATALOG TAB (دليل المقررات والمتطلبات) */}
       {/* ============================================================= */}
       {activeAdminTab === 'COURSES' && (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden space-y-4 p-6">
@@ -1007,112 +1031,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentTab, onNa
       {/* 5. CSV IMPORT TAB (استيراد البيانات) */}
       {/* ============================================================= */}
       {activeAdminTab === 'IMPORT' && (
-        <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-xs space-y-4">
-          <div>
-            <h3 className="text-sm font-bold text-slate-900 mb-1">
-              {t('استيراد بيانات الطلاب أو المقررات عبر ملفات CSV / Excel', 'CSV / Excel Data Importer')}
-            </h3>
-            <p className="text-xs text-slate-500">
-              {t(
-                'التحقق المسبق من صحة السجلات والبيانات قبل إدخالها لمنع أي خلل في قاعدة البيانات الأكاديمية.',
-                'Validates every record and reports exact line validation errors to prevent partial corruption.'
-              )}
-            </p>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => {
-                setImportType('STUDENTS');
-                setCsvText(sampleData.STUDENTS);
-              }}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
-                importType === 'STUDENTS' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700'
-              }`}
-            >
-              {t('بيانات الطلاب (Students)', 'Students')}
-            </button>
-            <button
-              onClick={() => {
-                setImportType('COURSES');
-                setCsvText(sampleData.COURSES);
-              }}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
-                importType === 'COURSES' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700'
-              }`}
-            >
-              {t('دليل المقررات (Courses)', 'Courses')}
-            </button>
-            <button
-              onClick={() => {
-                setImportType('GRADES');
-                setCsvText(sampleData.GRADES);
-              }}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
-                importType === 'GRADES' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700'
-              }`}
-            >
-              {t('رصد الدرجات (Grades)', 'Grades')}
-            </button>
-          </div>
-
-          <div>
-            <label className="text-xs font-bold text-slate-700 block mb-1">
-              {t('محتوى ملف CSV التجريبي (يمكنك التعديل أو لصق محتوى جديد):', 'CSV Data Content:')}
-            </label>
-            <textarea
-              rows={6}
-              value={csvText}
-              onChange={e => setCsvText(e.target.value)}
-              className="w-full font-mono text-xs p-3 rounded-xl border border-slate-200 bg-slate-50 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
-            ></textarea>
-          </div>
-
-          <button
-            disabled={importing}
-            onClick={handleRunImport}
-            className="px-6 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition flex items-center gap-2 cursor-pointer shadow-xs"
-          >
-            <UploadCloud className="w-4 h-4" />
-            <span>{importing ? t('جارٍ الاستيراد والتدقيق...', 'Importing & Validating...') : t('بدء فحص واستيراد البيانات', 'Run Validation & Import')}</span>
-          </button>
-
-          {/* Import Report */}
-          {importReport && (
-            <div className="mt-4 p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-3 text-xs">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-slate-900">{t('تقرير نتيجة الاستيراد:', 'Validation Report:')}</span>
-                <div className="flex items-center gap-3">
-                  <span className="text-emerald-700 font-bold bg-emerald-100 px-2 py-0.5 rounded">
-                    {t('نجح: ', 'Success: ')} {importReport.successfulRows}
-                  </span>
-                  <span className="text-rose-700 font-bold bg-rose-100 px-2 py-0.5 rounded">
-                    {t('فشل: ', 'Failed: ')} {importReport.failedRows}
-                  </span>
-                </div>
-              </div>
-
-              {importReport.validationErrors.length > 0 ? (
-                <div className="space-y-1">
-                  <span className="text-rose-700 font-bold block">{t('أخطاء التدقيق:', 'Validation Errors:')}</span>
-                  <ul className="list-disc list-inside space-y-0.5 text-rose-800 text-[11px]">
-                    {importReport.validationErrors.map((err: any, i: number) => (
-                      <li key={i}>
-                        {t('سطر', 'Row')} {err.row}: {err.reason}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : (
-                <div className="text-emerald-700 font-bold flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4" />
-                  <span>{t('تم استيراد كافة الصفوف بنجاح ودون أية أخطاء بنية وحفظها في قاعدة البيانات.', 'All rows successfully imported without errors.')}</span>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+        <DataImportView onDataImported={loadAdminData} />
       )}
+
 
       {/* ============================================================= */}
       {/* 6. AUDIT LOG TAB (سجل العمليات والتدقيق) */}

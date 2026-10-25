@@ -1,12 +1,10 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { api, AuthUser, setActiveAuthContext } from '../services/api.js';
+import { api, AuthUser } from '../services/api.js';
 
-interface AuthContextType {
+export interface AuthContextType {
   currentUser: AuthUser | null;
-  usersList: AuthUser[];
-  loginAs: (email: string) => Promise<void>;
-  switchUser: (user: AuthUser) => void;
-  logout: () => void;
+  login: (identifier: string, password: string) => Promise<{ success: boolean; user?: AuthUser; error?: string }>;
+  logout: () => Promise<void>;
   isLoading: boolean;
 }
 
@@ -14,56 +12,74 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
-  const [usersList, setUsersList] = useState<AuthUser[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   useEffect(() => {
     async function initAuth() {
       try {
-        const users = await api.getUsers();
-        setUsersList(users);
-        // Default to student Omar Farouk (at risk demo)
-        const defaultUser = users.find(u => u.id === 'user_student') || users[0];
-        setCurrentUser(defaultUser);
-        if (defaultUser) {
-          setActiveAuthContext(`jwt_mock_${defaultUser.id}`, defaultUser.id);
+        const storedToken = localStorage.getItem('auth_token');
+        if (storedToken) {
+          const user = await api.getCurrentUser();
+          if (user) {
+            setCurrentUser(user);
+          } else {
+            localStorage.removeItem('auth_token');
+            localStorage.removeItem('auth_user');
+            localStorage.removeItem('auth_user_id');
+          }
         }
       } catch (err) {
-        console.error('Failed to load users:', err);
+        console.error('Failed to initialize session:', err);
       } finally {
         setIsLoading(false);
       }
     }
+
     initAuth();
+
+    const handleUnauthorized = () => {
+      setCurrentUser(null);
+      localStorage.removeItem('auth_token');
+      localStorage.removeItem('auth_user');
+      localStorage.removeItem('auth_user_id');
+    };
+    window.addEventListener('auth:unauthorized', handleUnauthorized);
+    return () => window.removeEventListener('auth:unauthorized', handleUnauthorized);
   }, []);
 
-  const loginAs = async (email: string) => {
+  const login = async (identifier: string, password: string) => {
     setIsLoading(true);
     try {
-      const res = await api.login(email);
+      const res = await api.login(identifier, password);
       setCurrentUser(res.user);
-      setActiveAuthContext(res.token, res.user.id);
-    } catch (err) {
-      console.error('Login error:', err);
+      return { success: true, user: res.user };
+    } catch (err: any) {
+      const errorMsg =
+        err.response?.data?.messageAr ||
+        err.response?.data?.message ||
+        err.message ||
+        'بيانات الدخول غير صحيحة';
+      return { success: false, error: errorMsg };
     } finally {
       setIsLoading(false);
     }
   };
 
-  const switchUser = (user: AuthUser) => {
-    setCurrentUser(user);
-    setActiveAuthContext(`jwt_mock_${user.id}`, user.id);
-  };
-
-  const logout = () => {
-    if (usersList.length > 0) {
-      setCurrentUser(usersList[0]);
-      setActiveAuthContext(`jwt_mock_${usersList[0].id}`, usersList[0].id);
+  const logout = async () => {
+    setIsLoading(true);
+    try {
+      await api.logout();
+    } finally {
+      setCurrentUser(null);
+      localStorage.removeItem('auth_token');
+      localStorage.removeItem('auth_user');
+      localStorage.removeItem('auth_user_id');
+      setIsLoading(false);
     }
   };
 
   return (
-    <AuthContext.Provider value={{ currentUser, usersList, loginAs, switchUser, logout, isLoading }}>
+    <AuthContext.Provider value={{ currentUser, login, logout, isLoading }}>
       {children}
     </AuthContext.Provider>
   );

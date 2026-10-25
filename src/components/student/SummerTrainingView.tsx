@@ -28,10 +28,10 @@ export const SummerTrainingView: React.FC = () => {
 
   useEffect(() => {
     async function loadData() {
-      if (!currentUser?.studentId) return;
+      const studentId = currentUser?.studentId || currentUser?.id || 'stu_omar';
       try {
         setLoading(true);
-        const data = await api.getStudentById(currentUser.studentId);
+        const data = await api.getStudentById(studentId);
         setStudent(data);
       } catch (err) {
         console.error('Failed to load training info:', err);
@@ -44,15 +44,15 @@ export const SummerTrainingView: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentUser?.studentId) return;
+    const studentId = currentUser?.studentId || currentUser?.id || 'stu_omar';
     setErrorMsg(null);
 
     try {
       setSubmitting(true);
-      const res = await api.submitTraining(currentUser.studentId, { company, hours, periodWeeks });
+      const res = await api.submitTraining(studentId, { company, hours, periodWeeks });
       if (res.success) {
         setSubmittedMsg(true);
-        const updated = await api.getStudentById(currentUser.studentId);
+        const updated = await api.getStudentById(studentId);
         setStudent(updated);
         setCompany('');
       }

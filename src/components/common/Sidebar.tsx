@@ -28,7 +28,7 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab }) => {
-  const { currentUser, switchUser, usersList } = useAuth();
+  const { currentUser } = useAuth();
   const { t, language } = useLanguage();
 
   if (!currentUser) return null;
@@ -137,6 +137,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab }) => 
         icon: <LayoutDashboard className="w-4 h-4" />,
       },
       {
+        id: 'admin-users',
+        labelAr: 'إدارة المستخدمين',
+        labelEn: 'User Management',
+        icon: <Users className="w-4 h-4 text-indigo-600" />,
+      },
+      {
         id: 'admin-courses',
         labelAr: 'دليل المقررات والمتطلبات',
         labelEn: 'Courses & Prerequisites',
@@ -238,31 +244,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab }) => 
 
       {/* Quick Summary Pill in Sidebar */}
       <div className="mt-4 pt-4 border-t border-slate-100 hidden md:block space-y-3">
-        {/* Direct Admin Access Button */}
-        <button
-          onClick={() => {
-            const adminUser = usersList.find(u => u.role === 'ADMIN');
-            if (adminUser) switchUser(adminUser);
-          }}
-          className={`w-full flex items-center justify-between p-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
-            role === 'ADMIN'
-              ? 'bg-rose-50 border border-rose-200 text-rose-800'
-              : 'bg-slate-50 hover:bg-rose-50 border border-slate-200 hover:border-rose-200 text-slate-700 hover:text-rose-700'
-          }`}
-        >
-          <div className="flex items-center gap-2">
-            <Sliders className="w-4 h-4 text-rose-600" />
-            <span>{t('لوحة الآدمن (Admin)', 'Admin Portal')}</span>
-          </div>
-          {role === 'ADMIN' ? (
-            <span className="text-[10px] bg-rose-600 text-white px-1.5 py-0.5 rounded-full font-bold">
-              {t('نشط ✓', 'Active ✓')}
-            </span>
-          ) : (
-            <span className="text-[10px] font-mono text-slate-400">→</span>
-          )}
-        </button>
-
         <div className="bg-slate-50 rounded-xl p-3 border border-slate-200">
           <div className="text-[11px] font-bold text-slate-700 mb-1 flex items-center justify-between">
             <span>{t('قواعد اللائحة النشطة', 'Active Bylaws Engine')}</span>

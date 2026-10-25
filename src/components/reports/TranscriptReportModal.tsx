@@ -22,16 +22,22 @@ export const TranscriptReportModal: React.FC<TranscriptModalProps> = ({ studentI
   const { t, language } = useLanguage();
   const [report, setReport] = useState<VerifiedTranscriptReport | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     async function loadTranscript() {
       try {
         setLoading(true);
-        const res = await fetch(`/api/reports/transcript/${studentId}`);
-        const data = await res.json();
-        setReport(data);
-      } catch (err) {
+        setError(null);
+        const data = await api.getOfficialTranscript(studentId || 'stu_omar');
+        if (data && data.verificationToken) {
+          setReport(data);
+        } else {
+          setError(t('تعذر تحميل السجل الأكاديمي الرسمي لهذا الطالب.', 'Could not load official transcript for this student.'));
+        }
+      } catch (err: any) {
         console.error('Failed to load transcript:', err);
+        setError(err?.message || t('حدث خطأ أثناء استخراج السجل الموثق.', 'Failed to generate verified transcript.'));
       } finally {
         setLoading(false);
       }
@@ -42,7 +48,7 @@ export const TranscriptReportModal: React.FC<TranscriptModalProps> = ({ studentI
   if (loading) {
     return (
       <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl p-8 flex flex-col items-center gap-3">
+        <div className="bg-white rounded-2xl p-8 flex flex-col items-center gap-3 shadow-xl">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
           <span className="text-xs font-bold text-slate-600">{t('جارٍ استخراج وتوثيق السجل الأكاديمي الرسمي...', 'Generating Official Verified Transcript...')}</span>
         </div>
@@ -50,7 +56,21 @@ export const TranscriptReportModal: React.FC<TranscriptModalProps> = ({ studentI
     );
   }
 
-  if (!report) return null;
+  if (error || !report) {
+    return (
+      <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl p-6 max-w-md w-full flex flex-col items-center gap-4 text-center shadow-xl">
+          <div className="text-xs font-bold text-rose-600">{error || t('السجل غير متوفر حالياً', 'Transcript unavailable')}</div>
+          <button
+            onClick={onClose}
+            className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold hover:bg-slate-800 cursor-pointer"
+          >
+            {t('إغلاق', 'Close')}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
@@ -112,11 +132,11 @@ export const TranscriptReportModal: React.FC<TranscriptModalProps> = ({ studentI
           </div>
           <div>
             <span className="text-slate-400 block text-[10px] font-bold">{t('المعدل التراكمي (GPA)', 'Cumulative GPA')}</span>
-            <span className="font-extrabold text-slate-900">{report.cumulativeGpa.toFixed(2)} / 4.00</span>
+            <span className="font-extrabold text-slate-900">{(report.cumulativeGpa ?? 0).toFixed(2)} / 4.00</span>
           </div>
           <div>
             <span className="text-slate-400 block text-[10px] font-bold">{t('الساعات المنجزة', 'Earned Hours')}</span>
-            <span className="font-extrabold text-slate-900">{report.completedCredits} / 134 {t('ساعة', 'hrs')}</span>
+            <span className="font-extrabold text-slate-900">{report.completedCredits ?? 0} / 134 {t('ساعة', 'hrs')}</span>
           </div>
         </div>
 
@@ -133,7 +153,7 @@ export const TranscriptReportModal: React.FC<TranscriptModalProps> = ({ studentI
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {report.courses.map((c, i) => (
+              {(report.courses || []).map((c, i) => (
                 <tr key={i} className="hover:bg-slate-50">
                   <td className="px-4 py-2 font-mono font-bold text-slate-800">{c.code}</td>
                   <td className="px-4 py-2 text-slate-900">{language === 'ar' ? c.nameAr : c.nameEn}</td>

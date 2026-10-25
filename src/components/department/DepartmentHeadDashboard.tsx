@@ -268,8 +268,8 @@ export const DepartmentHeadDashboard: React.FC<DepartmentHeadDashboardProps> = (
             </div>
 
             <div className="space-y-3">
-              {(activeTab === 'SEATS' ? seatStats : seatStats.slice(0, 5)).map((s: any) => (
-                <div key={s.courseCode} className="space-y-1">
+              {(activeTab === 'SEATS' ? seatStats : seatStats.slice(0, 5)).map((s: any, idx: number) => (
+                <div key={`${s.courseCode}_${s.id || idx}`} className="space-y-1">
                   <div className="flex items-center justify-between text-xs">
                     <span className="font-bold text-slate-800">
                       {s.courseCode} - {language === 'ar' ? s.courseNameAr : s.courseNameEn}

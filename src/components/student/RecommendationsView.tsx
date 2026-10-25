@@ -29,10 +29,10 @@ export const RecommendationsView: React.FC<RecommendationsViewProps> = ({ onNavi
 
   useEffect(() => {
     async function loadRecs() {
-      if (!currentUser?.studentId) return;
+      const studentId = currentUser?.studentId || currentUser?.id || 'stu_omar';
       try {
         setLoading(true);
-        const data = await api.getRecommendations(currentUser.studentId);
+        const data = await api.getRecommendations(studentId);
         setRecommendations(data);
       } catch (err) {
         console.error('Failed to load recommendations:', err);
@@ -44,7 +44,17 @@ export const RecommendationsView: React.FC<RecommendationsViewProps> = ({ onNavi
   }, [currentUser]);
 
   const handleAddToPlan = (code: string) => {
-    setAddedCourses(prev => new Set(prev).add(code));
+    setAddedCourses(prev => {
+      const next = new Set(prev).add(code);
+      try {
+        const studentId = currentUser?.studentId || currentUser?.id || 'stu_omar';
+        const existing = JSON.parse(localStorage.getItem(`staged_recovery_courses_${studentId}`) || '[]');
+        const updated = Array.from(new Set([...existing, ...Array.from(next)]));
+        localStorage.setItem(`staged_recovery_courses_${studentId}`, JSON.stringify(updated));
+        localStorage.setItem('staged_recovery_courses', JSON.stringify(updated));
+      } catch {}
+      return next;
+    });
   };
 
   const priorityBadge: Record<string, string> = {
@@ -110,12 +120,12 @@ export const RecommendationsView: React.FC<RecommendationsViewProps> = ({ onNavi
 
       {/* Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {filtered.map(rec => {
+        {filtered.map((rec, idx) => {
           const isAdded = addedCourses.has(rec.courseCode);
 
           return (
             <div
-              key={rec.courseCode}
+              key={`${rec.courseCode}_${idx}`}
               className={`bg-white rounded-2xl p-5 border transition-all hover:shadow-md flex flex-col justify-between ${
                 rec.priority === 'CRITICAL'
                   ? 'border-rose-300 ring-1 ring-rose-200'
@@ -246,6 +256,32 @@ export const RecommendationsView: React.FC<RecommendationsViewProps> = ({ onNavi
           );
         })}
       </div>
+
+      {/* Floating Action Banner when courses are staged */}
+      {addedCourses.size > 0 && (
+        <div className="sticky bottom-4 z-40 bg-slate-900 text-white p-4 rounded-2xl shadow-xl flex items-center justify-between gap-4 border border-slate-700 animate-in fade-in slide-in-from-bottom-2 duration-200">
+          <div className="flex items-center gap-3">
+            <span className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-sm">
+              {addedCourses.size}
+            </span>
+            <div>
+              <p className="text-xs font-bold">
+                {t(`تمت إضافة ${addedCourses.size} مقرر(ات) مقترح(ة) إلى مسودة التسجيل`, `${addedCourses.size} recommended course(s) added to your registration draft`)}
+              </p>
+              <p className="text-[11px] text-slate-400">
+                {t('جاهزة لتثبيت جدول الفصل الدراسي الحالي وحل أي تعارضات زمنية.', 'Ready to build and confirm your semester schedule.')}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => onNavigateTab('student-registration')}
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-xs shrink-0"
+          >
+            <span>{t('الانتقال للتسجيل وتثبيت الجدول', 'Go to Course Registration')}</span>
+            <CheckCircle2 className="w-4 h-4" />
+          </button>
+        </div>
+      )}
     </div>
   );
 };

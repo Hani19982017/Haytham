@@ -45,10 +45,11 @@ export const WhatIfSimulator: React.FC = () => {
 
   useEffect(() => {
     async function runSim() {
-      if (!currentUser?.studentId || selectedItems.length === 0) return;
+      const studentId = currentUser?.studentId || currentUser?.id || 'stu_omar';
+      if (selectedItems.length === 0) return;
       try {
         setLoading(true);
-        const res = await api.simulateWhatIf(currentUser.studentId, selectedItems);
+        const res = await api.simulateWhatIf(studentId, selectedItems);
         setSimulationResult(res);
       } catch (err) {
         console.error('Simulation error:', err);

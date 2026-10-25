@@ -1,4 +1,7 @@
 import React, { useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import * as z from 'zod';
 import { useAuth } from '../../context/AuthContext.js';
 import { useLanguage } from '../../context/LanguageContext.js';
 import {
@@ -8,229 +11,324 @@ import {
   ArrowRight,
   ShieldCheck,
   Building,
-  KeyRound,
+  CheckCircle2,
   AlertCircle,
+  Eye,
+  EyeOff,
   Sparkles,
+  BookOpen,
+  Award,
+  Layers,
+  Languages,
 } from 'lucide-react';
+
+const loginSchema = z.object({
+  identifier: z
+    .string()
+    .min(3, { message: 'يرجى إدخال البريد الإلكتروني أو الرقم الجامعي بشكل صحيح' }),
+  password: z
+    .string()
+    .min(6, { message: 'كلمة المرور يجب أن تتكون من 6 أحرف على الأقل' }),
+});
+
+type LoginFormData = z.infer<typeof loginSchema>;
 
 interface LoginViewProps {
   onSuccess?: () => void;
 }
 
 export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
-  const { loginAs, usersList, switchUser } = useAuth();
-  const { t, language } = useLanguage();
-
-  const [activeTab, setActiveTab] = useState<'CREDENTIALS' | 'SSO' | 'DEMO'>('CREDENTIALS');
-  const [email, setEmail] = useState('student@example.com');
-  const [password, setPassword] = useState('password123');
-  const [isLoading, setIsLoading] = useState(false);
+  const { login } = useAuth();
+  const { t, language, toggleLanguage } = useLanguage();
+  const [showPassword, setShowPassword] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const handleCredentialsLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsLoading(true);
+  const {
+    register,
+    handleSubmit,
+    setValue,
+    formState: { errors, isSubmitting },
+  } = useForm<LoginFormData>({
+    resolver: zodResolver(loginSchema),
+    defaultValues: {
+      identifier: '',
+      password: '',
+    },
+  });
+
+  const onSubmit = async (data: LoginFormData) => {
     setErrorMessage(null);
-
-    try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.messageAr || data.error || 'فشل تسجيل الدخول');
-      }
-
-      await loginAs(email);
+    const result = await login(data.identifier, data.password);
+    if (result.success) {
       if (onSuccess) onSuccess();
-    } catch (err: any) {
-      setErrorMessage(err.message || 'بيانات الدخول غير صحيحة');
-    } finally {
-      setIsLoading(false);
+    } else {
+      setErrorMessage(result.error || t('بيانات الدخول غير صحيحة', 'Invalid credentials'));
     }
   };
 
-  const handleSsoLogin = async (provider: string) => {
-    setIsLoading(true);
-    try {
-      // SSO Authentication Flow
-      await loginAs('admin@example.com');
-      if (onSuccess) onSuccess();
-    } catch (err) {
-      setErrorMessage('تعذر الاتصال بخادم الهوية الجامعي الموحد');
-    } finally {
-      setIsLoading(false);
-    }
+  const fillQuickAccount = (email: string) => {
+    setValue('identifier', email);
+    setValue('password', 'password123');
+    setErrorMessage(null);
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 flex items-center justify-center p-4">
-      <div className="bg-slate-800/90 border border-slate-700 rounded-3xl shadow-2xl max-w-md w-full p-8 backdrop-blur-md relative overflow-hidden">
-        {/* Glow Effects */}
-        <div className="absolute -top-24 -right-24 w-48 h-48 bg-indigo-500/20 rounded-full blur-3xl pointer-events-none"></div>
-        <div className="absolute -bottom-24 -left-24 w-48 h-48 bg-purple-500/20 rounded-full blur-3xl pointer-events-none"></div>
+    <div className="min-h-screen w-full flex flex-col lg:flex-row bg-slate-950 text-slate-100">
+      {/* 1. Left Section: Branded Academic Graphic / Presentation Card */}
+      <div className="hidden lg:flex lg:w-1/2 relative bg-gradient-to-br from-indigo-950 via-slate-900 to-slate-950 p-12 flex-col justify-between overflow-hidden border-l border-slate-800">
+        {/* Background glow graphics */}
+        <div className="absolute top-1/4 -right-20 w-96 h-96 bg-indigo-600/20 rounded-full blur-3xl pointer-events-none"></div>
+        <div className="absolute bottom-10 left-10 w-80 h-80 bg-purple-600/15 rounded-full blur-3xl pointer-events-none"></div>
 
-        {/* Brand Header */}
-        <div className="flex flex-col items-center text-center mb-8">
-          <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 to-indigo-800 flex items-center justify-center text-white shadow-lg shadow-indigo-500/30 mb-3">
-            <GraduationCap className="w-8 h-8 text-amber-300" />
-          </div>
-          <h2 className="text-xl font-bold tracking-tight text-white">
-            {t('المستشار الأكاديمي الذكي', 'Smart Academic Advisor')}
-          </h2>
-          <p className="text-xs text-slate-400 mt-1">
-            {t('منظومة الإرشاد والتوجيه الأكاديمي لبرامج الساعات المعتمدة', 'University Credit-Hour Academic Guidance System')}
-          </p>
-        </div>
-
-        {/* Auth Method Tabs */}
-        <div className="grid grid-cols-3 gap-1 bg-slate-900/60 p-1 rounded-xl mb-6 text-xs font-semibold">
-          <button
-            type="button"
-            onClick={() => setActiveTab('CREDENTIALS')}
-            className={`py-2 rounded-lg transition cursor-pointer ${
-              activeTab === 'CREDENTIALS' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            {t('بيانات الحساب', 'Credentials')}
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('SSO')}
-            className={`py-2 rounded-lg transition cursor-pointer ${
-              activeTab === 'SSO' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            {t('الدخول الموحد SSO', 'University SSO')}
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('DEMO')}
-            className={`py-2 rounded-lg transition cursor-pointer ${
-              activeTab === 'DEMO' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            {t('حسابات العرض', 'Demo Accounts')}
-          </button>
-        </div>
-
-        {errorMessage && (
-          <div className="mb-4 p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>{errorMessage}</span>
-          </div>
-        )}
-
-        {/* 1. Production Credentials Form */}
-        {activeTab === 'CREDENTIALS' && (
-          <form onSubmit={handleCredentialsLogin} className="space-y-4 text-xs">
+        {/* Top Header */}
+        <div className="relative z-10 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-indigo-500 to-indigo-700 flex items-center justify-center text-white shadow-lg shadow-indigo-500/30">
+              <GraduationCap className="w-6 h-6 text-amber-300" />
+            </div>
             <div>
-              <label className="block text-slate-300 font-bold mb-1">
-                {t('البريد الإلكتروني الجامعي', 'University Email Address')}
+              <h2 className="text-base font-extrabold text-white tracking-wide">
+                {t('كلية الحاسبات والمعلومات والذكاء الاصطناعي', 'Faculty of Computers & Artificial Intelligence')}
+              </h2>
+              <span className="text-[11px] text-indigo-300 font-medium">
+                {t('برنامج علوم الحاسب بنظام الساعات المعتمدة', 'Computer Science Credit-Hour Degree Program')}
+              </span>
+            </div>
+          </div>
+
+          <button
+            onClick={toggleLanguage}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-700/60 bg-slate-800/40 text-xs text-slate-300 hover:text-white transition cursor-pointer"
+          >
+            <Languages className="w-3.5 h-3.5" />
+            <span>{language === 'ar' ? 'English' : 'العربية'}</span>
+          </button>
+        </div>
+
+        {/* Center Presentation Graphic & Feature Cards */}
+        <div className="relative z-10 my-auto py-10 space-y-6">
+          <div>
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/15 border border-indigo-400/20 text-indigo-300 text-xs font-bold mb-4">
+              <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+              <span>{t('محرك اللائحة الذكي v2.5 متوافق مع نظام ابن الهيثم', 'Smart Bylaws Engine v2.5 - Ibn Al-Haitham Compatible')}</span>
+            </div>
+            <h1 className="text-3xl font-extrabold text-white leading-tight">
+              {t(
+                'منظومة الإرشاد والتوجيه الأكاديمي الرقمية المتكاملة',
+                'Next-Gen Digital Academic Advising & Rules Enforcement Platform'
+              )}
+            </h1>
+            <p className="text-sm text-slate-400 mt-2 max-w-xl leading-relaxed">
+              {t(
+                'تطبيق رسمي متكامل لإدارة تسجيل المقررات، التنبؤ بمخاطر التعثر الأكاديمي، فحص شجرة المتطلبات السابقة، وحساب المعدلات التراكمية في قاعدة بيانات PostgreSQL موثوقة.',
+                'Enterprise full-stack academic guidance platform enforcing real-time GPA rules, prerequisite chains, risk classification, and graduation trajectory.'
+              )}
+            </p>
+          </div>
+
+          {/* Highlights Grid */}
+          <div className="grid grid-cols-2 gap-4 pt-2">
+            <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800/80 backdrop-blur-sm">
+              <div className="w-8 h-8 rounded-xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center mb-2">
+                <CheckCircle2 className="w-4 h-4" />
+              </div>
+              <h4 className="text-xs font-bold text-white mb-1">
+                {t('قواعد اللائحة الرسمية 100%', 'Bylaws Compliance')}
+              </h4>
+              <p className="text-[11px] text-slate-400 leading-normal">
+                {t('حدود الساعات الفصليّة (12-21 ساعة) وسقف الإعادة الآلي.', 'Automated credit bounds & retake grade capping.')}
+              </p>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800/80 backdrop-blur-sm">
+              <div className="w-8 h-8 rounded-xl bg-purple-500/15 text-purple-400 flex items-center justify-center mb-2">
+                <ShieldCheck className="w-4 h-4" />
+              </div>
+              <h4 className="text-xs font-bold text-white mb-1">
+                {t('أمان مؤسسي JWT + Bcrypt', 'Enterprise Security')}
+              </h4>
+              <p className="text-[11px] text-slate-400 leading-normal">
+                {t('صلاحيات وصول دقيقة (RBAC) وسجل تدقيق غير قابل للتعديل.', 'Strict RBAC policies with immutable audit trail.')}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Footer info */}
+        <div className="relative z-10 pt-4 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-500">
+          <span>{t('مشروع التخرج: المستشار الأكاديمي الذكي', 'Graduation Project 2026')}</span>
+          <span>PostgreSQL + Prisma + Express + Render</span>
+        </div>
+      </div>
+
+      {/* 2. Right Section: Enterprise Login Form (RTL by default) */}
+      <div className="w-full lg:w-1/2 flex items-center justify-center p-6 sm:p-12 md:p-16 relative">
+        <div className="w-full max-w-md space-y-6">
+          {/* Mobile Top Brand (only visible on small screens) */}
+          <div className="lg:hidden flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <div className="w-9 h-9 rounded-xl bg-indigo-600 flex items-center justify-center text-white">
+                <GraduationCap className="w-5 h-5 text-amber-300" />
+              </div>
+              <span className="font-bold text-white text-sm">
+                {t('المستشار الأكاديمي الذكي', 'Smart Academic Advisor')}
+              </span>
+            </div>
+            <button
+              onClick={toggleLanguage}
+              className="text-xs px-2.5 py-1 rounded-lg border border-slate-700 text-slate-300"
+            >
+              {language === 'ar' ? 'English' : 'عربي'}
+            </button>
+          </div>
+
+          <div>
+            <h2 className="text-2xl font-bold text-white tracking-tight">
+              {t('تسجيل الدخول إلى النظام الأكاديمي', 'Sign In to Your Account')}
+            </h2>
+            <p className="text-xs text-slate-400 mt-1">
+              {t(
+                'أدخل بريدك الجامعي أو كود الطالب مع كلمة المرور المشفرة للمتابعة.',
+                'Enter your university email or student code and password.'
+              )}
+            </p>
+          </div>
+
+          {/* Error Message Alert */}
+          {errorMessage && (
+            <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2.5 animate-shake">
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+              <span className="font-medium">{errorMessage}</span>
+            </div>
+          )}
+
+          {/* Login Form */}
+          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                {t('البريد الإلكتروني أو كود الطالب', 'Email or Student Code')}
               </label>
               <div className="relative">
-                <Mail className="w-4 h-4 text-slate-400 absolute right-3 top-3" />
+                <Mail className="w-4 h-4 text-slate-400 absolute right-3.5 top-3 rtl:right-3.5 rtl:left-auto ltr:left-3.5 ltr:right-auto" />
                 <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={e => setEmail(e.target.value)}
-                  placeholder="name@university.edu"
-                  className="w-full pr-10 pl-3 py-2.5 rounded-xl border border-slate-700 bg-slate-900/60 text-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500 font-mono"
+                  type="text"
+                  autoComplete="username"
+                  {...register('identifier')}
+                  placeholder={t('name@university.edu أو 2021001', 'name@university.edu or 2021001')}
+                  className={`w-full pr-10 pl-3 py-2.5 rounded-xl border text-xs font-mono bg-slate-900/90 text-white placeholder-slate-500 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 transition ${
+                    errors.identifier ? 'border-rose-500' : 'border-slate-800'
+                  }`}
                 />
               </div>
+              {errors.identifier && (
+                <span className="text-[11px] text-rose-400 mt-1 block font-medium">
+                  {errors.identifier.message}
+                </span>
+              )}
             </div>
 
             <div>
-              <label className="block text-slate-300 font-bold mb-1">
-                {t('كلمة المرور', 'Password')}
-              </label>
-              <div className="relative">
-                <Lock className="w-4 h-4 text-slate-400 absolute right-3 top-3" />
-                <input
-                  type="password"
-                  required
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full pr-10 pl-3 py-2.5 rounded-xl border border-slate-700 bg-slate-900/60 text-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500 font-mono"
-                />
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-xs font-bold text-slate-300">
+                  {t('كلمة المرور المشفرة', 'Password')}
+                </label>
+                <span className="text-[10px] text-indigo-400 font-medium">
+                  {t('كلمة المرور الافتراضية: password123', 'Default: password123')}
+                </span>
               </div>
+              <div className="relative">
+                <Lock className="w-4 h-4 text-slate-400 absolute right-3.5 top-3 rtl:right-3.5 rtl:left-auto ltr:left-3.5 ltr:right-auto" />
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  {...register('password')}
+                  placeholder="••••••••"
+                  className={`w-full pr-10 pl-10 py-2.5 rounded-xl border text-xs font-mono bg-slate-900/90 text-white placeholder-slate-500 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 transition ${
+                    errors.password ? 'border-rose-500' : 'border-slate-800'
+                  }`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute left-3.5 top-3 rtl:left-3.5 rtl:right-auto ltr:right-3.5 ltr:left-auto text-slate-400 hover:text-slate-200 cursor-pointer"
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+              {errors.password && (
+                <span className="text-[11px] text-rose-400 mt-1 block font-medium">
+                  {errors.password.message}
+                </span>
+              )}
             </div>
 
             <button
               type="submit"
-              disabled={isLoading}
-              className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold transition flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/30 cursor-pointer text-xs"
+              disabled={isSubmitting}
+              className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/30 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed mt-2"
             >
-              <span>{isLoading ? t('جارٍ التحقق المشفر...', 'Authenticating...') : t('تسجيل الدخول للنظام الأكاديمي', 'Sign In')}</span>
-              <ArrowRight className="w-4 h-4" />
+              {isSubmitting ? (
+                <>
+                  <div className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin"></div>
+                  <span>{t('جارٍ التحقق من الحساب وإصدار الجلسة...', 'Authenticating & Issuing Token...')}</span>
+                </>
+              ) : (
+                <>
+                  <span>{t('دخول النظام الأكاديمي', 'Sign In to Dashboard')}</span>
+                  <ArrowRight className="w-4 h-4 rtl:rotate-180" />
+                </>
+              )}
             </button>
           </form>
-        )}
 
-        {/* 2. University SSO Form */}
-        {activeTab === 'SSO' && (
-          <div className="space-y-3 text-xs">
-            <p className="text-slate-400 text-center mb-4">
-              {t(
-                'تسجيل الدخول الموحد باستخدام حساب مايكروسوفت أو الهوية الجامعية الرسمية (Active Directory / Azure AD):',
-                'Sign in using your institutional Microsoft Azure AD or University SSO directory:'
-              )}
-            </p>
+          {/* Quick Demo Personas Selector (for Evaluators & Convenience) */}
+          <div className="pt-4 border-t border-slate-800/80 space-y-2.5">
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span className="font-bold flex items-center gap-1.5 text-slate-300">
+                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                {t('حسابات التقييم المعتمدة (اضغط للتعبئة الفورية):', 'Quick Demo Accounts (Click to Fill):')}
+              </span>
+            </div>
 
-            <button
-              type="button"
-              disabled={isLoading}
-              onClick={() => handleSsoLogin('MICROSOFT_AZURE_AD')}
-              className="w-full py-2.5 rounded-xl border border-slate-700 bg-slate-900/80 hover:bg-slate-900 text-white font-bold transition flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <Building className="w-4 h-4 text-indigo-400" />
-              <span>{t('تسجيل الدخول عبر Microsoft Azure AD', 'Sign in with Microsoft Azure AD')}</span>
-            </button>
-
-            <button
-              type="button"
-              disabled={isLoading}
-              onClick={() => handleSsoLogin('UNIVERSITY_IDP')}
-              className="w-full py-2.5 rounded-xl border border-slate-700 bg-slate-900/80 hover:bg-slate-900 text-white font-bold transition flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <ShieldCheck className="w-4 h-4 text-emerald-400" />
-              <span>{t('تسجيل الدخول عبر بوابة الجامعة (SAML/CAS)', 'Sign in with University Portal (SAML)')}</span>
-            </button>
-          </div>
-        )}
-
-        {/* 3. Demo Fast Access Selector */}
-        {activeTab === 'DEMO' && (
-          <div className="space-y-2 text-xs">
-            <p className="text-[11px] text-slate-400 mb-2">
-              {t('اختر حساباً تجريبياً جاهزاً لاستكشاف النظام بكافة الصلاحيات:', 'Select a pre-configured role to inspect the system:')}
-            </p>
-            {usersList.slice(0, 6).map(u => (
+            <div className="grid grid-cols-2 gap-2 text-xs">
               <button
-                key={u.id}
                 type="button"
-                onClick={() => {
-                  switchUser(u);
-                  if (onSuccess) onSuccess();
-                }}
-                className="w-full text-right p-2.5 rounded-xl border border-slate-700/60 bg-slate-900/60 hover:bg-slate-700 text-white transition flex items-center justify-between cursor-pointer"
+                onClick={() => fillQuickAccount('student@example.com')}
+                className="p-2.5 rounded-xl border border-slate-800 bg-slate-900/60 hover:bg-slate-850 hover:border-indigo-500/50 text-right transition cursor-pointer"
               >
-                <div>
-                  <div className="font-bold text-slate-200">{language === 'ar' ? u.nameAr : u.nameEn}</div>
-                  <div className="text-[10px] text-slate-400 font-mono">{u.email}</div>
-                </div>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                  {u.role}
-                </span>
+                <div className="font-bold text-slate-200 text-[11px]">طالب: عمر فاروق</div>
+                <div className="text-[10px] text-slate-500 font-mono">student@example.com</div>
               </button>
-            ))}
+
+              <button
+                type="button"
+                onClick={() => fillQuickAccount('admin@example.com')}
+                className="p-2.5 rounded-xl border border-slate-800 bg-slate-900/60 hover:bg-slate-850 hover:border-rose-500/50 text-right transition cursor-pointer"
+              >
+                <div className="font-bold text-rose-300 text-[11px]">الآدمن: عميد الكلية</div>
+                <div className="text-[10px] text-slate-500 font-mono">admin@example.com</div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => fillQuickAccount('advisor@example.com')}
+                className="p-2.5 rounded-xl border border-slate-800 bg-slate-900/60 hover:bg-slate-850 hover:border-amber-500/50 text-right transition cursor-pointer"
+              >
+                <div className="font-bold text-amber-300 text-[11px]">المرشد: د. محمود صقر</div>
+                <div className="text-[10px] text-slate-500 font-mono">advisor@example.com</div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => fillQuickAccount('instructor@example.com')}
+                className="p-2.5 rounded-xl border border-slate-800 bg-slate-900/60 hover:bg-slate-850 hover:border-indigo-500/50 text-right transition cursor-pointer"
+              >
+                <div className="font-bold text-indigo-300 text-[11px]">أستاذ: أ.د. عادل منصور</div>
+                <div className="text-[10px] text-slate-500 font-mono">instructor@example.com</div>
+              </button>
+            </div>
           </div>
-        )}
+        </div>
       </div>
     </div>
   );
