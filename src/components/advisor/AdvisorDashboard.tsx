@@ -53,6 +53,7 @@ export const AdvisorDashboard: React.FC<AdvisorDashboardProps> = ({ currentTab, 
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [selectedRisk, setSelectedRisk] = useState('ALL');
+  const [reviewStatusFilter, setReviewStatusFilter] = useState<'PENDING' | 'REVIEWED' | 'ALL'>('PENDING');
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
   const [decisionNotes, setDecisionNotes] = useState('');
   const [decisionAction, setDecisionAction] = useState<'APPROVE' | 'REJECT' | 'REQUEST_CHANGES'>('APPROVE');
@@ -93,10 +94,14 @@ export const AdvisorDashboard: React.FC<AdvisorDashboardProps> = ({ currentTab, 
   const criticalCount = students.filter(s => s.riskLevel === 'CRITICAL').length;
   const highCount = students.filter(s => s.riskLevel === 'HIGH').length;
   const below2Count = students.filter(s => s.cumulativeGpa < 2.0).length;
-  const pendingPlansCount = students.filter(s => s.currentPlanStatus === 'Pending Review').length;
+  const pendingPlansCount = students.filter(s => s.currentPlanStatus !== 'Approved' && s.currentPlanStatus !== 'Rejected').length;
+  const reviewedPlansCount = students.filter(s => s.currentPlanStatus === 'Approved' || s.currentPlanStatus === 'Rejected').length;
 
   const filtered = students.filter(s => {
-    if (activeTab === 'PLANS' && s.currentPlanStatus !== 'Pending Review') return false;
+    const isReviewed = s.currentPlanStatus === 'Approved' || s.currentPlanStatus === 'Rejected';
+    if (activeTab === 'PLANS' && isReviewed) return false;
+    if (reviewStatusFilter === 'PENDING' && isReviewed) return false;
+    if (reviewStatusFilter === 'REVIEWED' && !isReviewed) return false;
     if (selectedRisk !== 'ALL' && s.riskLevel !== selectedRisk) return false;
     if (search) {
       const q = search.toLowerCase();
@@ -201,15 +206,53 @@ export const AdvisorDashboard: React.FC<AdvisorDashboardProps> = ({ currentTab, 
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         {/* Table Filters */}
         <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="relative flex-1 max-w-sm">
-            <Search className="w-4 h-4 text-slate-400 absolute right-3 top-2.5" />
-            <input
-              type="text"
-              placeholder={t('البحث بالاسم أو كود الطالب...', 'Search by student name or code...')}
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="w-full pr-9 pl-3 py-1.5 rounded-xl border border-slate-200 text-xs bg-slate-50 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
-            />
+          <div className="flex flex-wrap items-center gap-3 flex-1">
+            <div className="relative flex-1 min-w-[200px] max-w-sm">
+              <Search className="w-4 h-4 text-slate-400 absolute right-3 top-2.5" />
+              <input
+                type="text"
+                placeholder={t('البحث بالاسم أو كود الطالب...', 'Search by student name or code...')}
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                className="w-full pr-9 pl-3 py-1.5 rounded-xl border border-slate-200 text-xs bg-slate-50 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+
+            <div className="inline-flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs font-bold">
+              <button
+                type="button"
+                onClick={() => setReviewStatusFilter('PENDING')}
+                className={`px-3 py-1 rounded-lg transition cursor-pointer ${
+                  reviewStatusFilter === 'PENDING'
+                    ? 'bg-white text-indigo-600 shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                {t(`بانتظار التوجيه (${pendingPlansCount})`, `Pending (${pendingPlansCount})`)}
+              </button>
+              <button
+                type="button"
+                onClick={() => setReviewStatusFilter('REVIEWED')}
+                className={`px-3 py-1 rounded-lg transition cursor-pointer ${
+                  reviewStatusFilter === 'REVIEWED'
+                    ? 'bg-white text-emerald-600 shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                {t(`تمت مراجعتهم (${reviewedPlansCount})`, `Reviewed (${reviewedPlansCount})`)}
+              </button>
+              <button
+                type="button"
+                onClick={() => setReviewStatusFilter('ALL')}
+                className={`px-3 py-1 rounded-lg transition cursor-pointer ${
+                  reviewStatusFilter === 'ALL'
+                    ? 'bg-white text-slate-900 shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                {t(`الكل (${students.length})`, `All (${students.length})`)}
+              </button>
+            </div>
           </div>
 
           <div className="flex items-center gap-2">

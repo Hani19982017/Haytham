@@ -169,16 +169,22 @@ export const TranscriptReportModal: React.FC<TranscriptModalProps> = ({ studentI
         {/* Footer with QR Code & Verification Info */}
         <div className="border-t-2 border-slate-200 pt-4 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            {/* Visual QR Code Box */}
-            <div className="w-20 h-20 bg-slate-900 text-white rounded-xl p-1.5 flex flex-col items-center justify-center shrink-0 border border-slate-700">
-              <QrCode className="w-12 h-12 text-white" />
-              <span className="text-[8px] font-mono text-slate-300">SCAN TO VERIFY</span>
+            {/* Scannable QR Code Box */}
+            <div className="w-24 h-24 bg-white rounded-xl p-1.5 flex flex-col items-center justify-center shrink-0 border-2 border-slate-900 shadow-xs">
+              <img
+                src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&margin=2&data=${encodeURIComponent(
+                  `جامعة القاهرة - كلية الحاسبات\nسجل أكاديمي موثق\nالطالب: ${report.studentNameAr}\nالكود: ${report.studentCode}\nالمعدل: ${(report.cumulativeGpa ?? 0).toFixed(2)}\nالساعات: ${report.completedCredits}/134\nرمز التحقق: ${report.verificationToken}\nالرابط: ${window.location.origin}/api/reports/verify/${report.verificationToken}`
+                )}`}
+                alt="Official Verification QR"
+                className="w-16 h-16 object-contain"
+              />
+              <span className="text-[7px] font-mono font-bold text-slate-900 mt-0.5">SCAN TO VERIFY</span>
             </div>
             <div className="text-[11px] text-slate-500 leading-relaxed">
               <div className="font-bold text-slate-800 mb-0.5">{t('رمز التحقق الرقمي الأكاديمي المعتمد:', 'Official Cryptographic Verification Code:')}</div>
               <div className="font-mono text-indigo-700 font-extrabold text-xs">{report.verificationToken}</div>
               <div className="text-[10px] text-slate-400 mt-0.5">
-                {t('يمكن مسح الرمز ضوئياً للتحقق اللحظي من صحة السجل مباشرة من خوادم الجامعة.', 'Scan QR to verify document integrity directly from university servers.')}
+                {t('امسح رمز QR بكاميرا الهاتف لعرض بيانات التصديق الرسمية ورمز التحقق.', 'Scan QR with your phone camera to view official verification data.')}
               </div>
             </div>
           </div>
