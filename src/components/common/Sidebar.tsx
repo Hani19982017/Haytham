@@ -104,7 +104,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab }) => 
         labelAr: 'اعتماد ومراجعة الخطط الدراسية',
         labelEn: 'Study Plans Approval',
         icon: <FileCheck2 className="w-4 h-4 text-emerald-500" />,
-        badge: '3',
       },
       {
         id: 'advisor-students',
