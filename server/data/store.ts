@@ -1182,7 +1182,7 @@ export const INITIAL_STUDENTS: Student[] = [
       riskReasons: warnings > 0 ? [`معدل تراكمي (${gpa}) تحت 2.0`] : ['أداء دراسي مستقر'],
       trainingHours: completed > 60 ? 120 : 0,
       trainingStatus: completed > 60 ? 'Accepted' : 'Pending',
-      currentPlanStatus: 'Approved',
+      currentPlanStatus: gpa < 2.0 ? 'Pending Review' : 'Approved',
       records: [
         {
           courseCode: 'CS 101',

@@ -1612,8 +1612,8 @@ apiRouter.post('/advisor/plans/:studentId/decision', async (req: Request, res: R
     const student = await StudentRepository.findById(studentId);
     if (!student) return res.status(404).json({ error: 'Student not found' });
 
-    const statusEnum = decision === 'APPROVE' ? 'APPROVED' : decision === 'REJECT' ? 'REJECTED' : 'DRAFT';
-    await StudyPlanRepository.updateStatus(studentId, statusEnum, notes);
+    const statusEnum = decision === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+    await StudyPlanRepository.updateStatus(student.id, statusEnum, notes);
 
     await NotificationRepository.createNotification({
       recipientId: student.id,
@@ -1635,7 +1635,7 @@ apiRouter.post('/advisor/plans/:studentId/decision', async (req: Request, res: R
       `Advisor decision (${decision}) on study plan for student ${student.nameEn}.`
     );
 
-    const statusString = decision === 'APPROVE' ? 'Approved' : decision === 'REJECT' ? 'Rejected' : 'Draft';
+    const statusString = decision === 'APPROVE' ? 'Approved' : 'Rejected';
     return res.json({ success: true, status: statusString });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });

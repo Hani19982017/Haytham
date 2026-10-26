@@ -27,6 +27,10 @@ export class StudentRepository {
 
     // Find latest study plan if any
     const latestPlan = row.studyPlans && row.studyPlans.length > 0 ? row.studyPlans[0] : null;
+    const memStu = INITIAL_STUDENTS.find(s => s.id === row.id || s.studentCode === row.studentCode);
+    const resolvedPlanStatus: PlanStatus = latestPlan
+      ? (latestPlan.status === 'APPROVED' ? 'Approved' : latestPlan.status === 'PENDING_REVIEW' ? 'Pending Review' : latestPlan.status === 'REJECTED' ? 'Rejected' : 'Draft')
+      : (memStu?.currentPlanStatus || (row.cumulativeGpa < 2.0 ? 'Pending Review' : 'Approved'));
 
     return {
       id: row.id,
@@ -50,7 +54,7 @@ export class StudentRepository {
       records,
       trainingHours: row.trainings?.[0]?.hours ?? 0,
       trainingStatus: (row.trainings?.[0]?.status ?? 'Pending') as TrainingStatus,
-      currentPlanStatus: (latestPlan?.status === 'APPROVED' ? 'Approved' : latestPlan?.status === 'PENDING_REVIEW' ? 'Pending Review' : latestPlan?.status === 'REJECTED' ? 'Rejected' : 'Draft') as PlanStatus,
+      currentPlanStatus: resolvedPlanStatus,
     };
   }
 
