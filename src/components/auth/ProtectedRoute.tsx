@@ -3,6 +3,7 @@ import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.js';
 import { useLanguage } from '../../context/LanguageContext.js';
 import { UserRole } from '../../types/index.js';
+import { Loader } from '../ui/primitives.js';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
@@ -19,13 +20,8 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center text-slate-100">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
-          <span className="text-xs font-bold text-slate-400">
-            {t('جارٍ التحقق من الجلسة والصلاحيات المشفرة...', 'Verifying authenticated session...')}
-          </span>
-        </div>
+      <div className="grid min-h-screen place-items-center bg-platform">
+        <Loader label={t('جارٍ التحقق من الجلسة…', 'Checking your session…')} />
       </div>
     );
   }

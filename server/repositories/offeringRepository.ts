@@ -3,22 +3,62 @@ import { CourseOffering } from '../../src/types/index.js';
 import { Prisma } from '@prisma/client';
 import { INITIAL_OFFERINGS } from '../data/store.js';
 
+const WEEK_DAYS_AR: Array<[string, RegExp]> = [
+  ['السبت', /السبت/],
+  ['الأحد', /الأحد|الاحد/],
+  ['الإثنين', /الإثنين|الاثنين/],
+  ['الثلاثاء', /الثلاثاء/],
+  ['الأربعاء', /الأربعاء|الاربعاء/],
+  ['الخميس', /الخميس/],
+];
+
+/**
+ * The database stores a section's schedule only as text ("الأحد والثلاثاء 10:00 - 11:30 ص").
+ * Recover the structured days/start/end the conflict checker needs from that text.
+ */
+function parseScheduleText(textAr: string): { days?: string[]; startTime?: string; endTime?: string } {
+  if (!textAr) return {};
+  const days = WEEK_DAYS_AR.filter(([, re]) => re.test(textAr)).map(([name]) => name);
+  const m = textAr.match(/(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/);
+  // Lectures run 08:30–16:30, so an hour below 8 is in the afternoon.
+  const to24 = (h: string, min: string) => {
+    let hour = parseInt(h, 10);
+    if (hour < 8) hour += 12;
+    return `${String(hour).padStart(2, '0')}:${min}`;
+  };
+  return {
+    days: days.length ? days : undefined,
+    startTime: m ? to24(m[1], m[2]) : undefined,
+    endTime: m ? to24(m[3], m[4]) : undefined,
+  };
+}
+
 export class OfferingRepository {
   public static mapToDomain(row: any): CourseOffering {
     const instructorName = row.instructor?.user?.nameAr
       ? `${row.instructor.user.nameAr} (${row.instructor.user.nameEn})`
       : 'أستاذ المادة';
 
+    const lectureDayTimeAr = row.scheduleAr || row.lectureDayTimeAr;
+    const parsed = parseScheduleText(lectureDayTimeAr || '');
+    const known = INITIAL_OFFERINGS.find(o => o.id === row.id);
+
     return {
       id: row.id,
       courseCode: row.course?.code || row.courseCode || '',
+      sectionCode: row.sectionCode || known?.sectionCode,
       semesterId: row.semesterId,
       instructorId: row.instructorId,
       instructorName,
       capacity: row.capacity,
       enrolledCount: row.enrolledCount,
-      lectureDayTimeAr: row.scheduleAr || row.lectureDayTimeAr,
+      lectureDayTimeAr,
       lectureDayTimeEn: row.scheduleEn || row.lectureDayTimeEn,
+      // Structured timing for clash detection: the stored text wins, seed data fills gaps.
+      days: parsed.days || row.days || known?.days,
+      startTime: parsed.startTime || row.startTime || known?.startTime,
+      endTime: parsed.endTime || row.endTime || known?.endTime,
+      periods: row.periods || known?.periods,
       hall: row.hall,
     };
   }

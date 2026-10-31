@@ -4,34 +4,49 @@ import { useAuth } from '../../context/AuthContext.js';
 import { useLanguage } from '../../context/LanguageContext.js';
 import { api } from '../../services/api.js';
 import { Course, CourseOffering, PlannedCourse, PlannedSemester, Student, StudyPlan } from '../../types/index.js';
+import { INSTITUTION } from '../../config/institution.js';
 import {
-  CalendarDays,
-  Send,
-  CheckCircle2,
-  Clock,
-  AlertTriangle,
-  GraduationCap,
-  Sparkles,
-  SlidersHorizontal,
+  PageHeader,
+  Panel,
+  Chip,
+  CodeBadge,
+  Meter,
+  Loader,
+  EmptyState,
+  Segmented,
+  Modal,
+  cn,
+  chipClass,
+  planStatusTone,
+  planStatusLabel,
+  personName,
+  pick,
+} from '../ui/index.js';
+import {
+  Route,
   Printer,
   RotateCcw,
-  BookOpen,
-  ArrowRight,
-  ArrowLeft,
-  ChevronRight,
-  Check,
-  Info,
-  CalendarCheck,
-  Layers,
-  Award,
+  Send,
+  PencilLine,
+  CheckCircle2,
   X,
-  ExternalLink,
+  CalendarCheck,
   Flame,
+  BookOpen,
+  AlertTriangle,
+  Info,
+  KeyRound,
+  Check,
+  Clock,
+  MessageSquareText,
 } from 'lucide-react';
 
 interface StudyPlanViewProps {
   onNavigateTab?: (tab: string) => void;
 }
+
+type Pace = 'NORMAL' | 'LIGHT' | 'HEAVY' | 'INCLUDE_SUMMER';
+type TermFilter = 'ALL' | 'YEAR_1' | 'YEAR_2' | 'SUMMER';
 
 export const StudyPlanView: React.FC<StudyPlanViewProps> = ({ onNavigateTab }) => {
   const { currentUser } = useAuth();
@@ -42,12 +57,12 @@ export const StudyPlanView: React.FC<StudyPlanViewProps> = ({ onNavigateTab }) =
   const [student, setStudent] = useState<Student | null>(null);
   const [allCourses, setAllCourses] = useState<Course[]>([]);
   const [offerings, setOfferings] = useState<CourseOffering[]>([]);
-  const [pace, setPace] = useState<'NORMAL' | 'LIGHT' | 'HEAVY' | 'INCLUDE_SUMMER'>('NORMAL');
+  const [pace, setPace] = useState<Pace>('NORMAL');
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [submittedSuccess, setSubmittedSuccess] = useState(false);
   const [activeCourseModal, setActiveCourseModal] = useState<PlannedCourse | null>(null);
-  const [filterTerm, setFilterTerm] = useState<'ALL' | 'YEAR_1' | 'YEAR_2' | 'SUMMER'>('ALL');
+  const [filterTerm, setFilterTerm] = useState<TermFilter>('ALL');
 
   const studentId = currentUser?.studentId || currentUser?.id || 'stu_omar';
 
@@ -75,8 +90,10 @@ export const StudyPlanView: React.FC<StudyPlanViewProps> = ({ onNavigateTab }) =
     loadPlan(pace, false);
   }, [currentUser]);
 
-  const handlePaceChange = (newPace: 'NORMAL' | 'LIGHT' | 'HEAVY' | 'INCLUDE_SUMMER') => {
+  const handlePaceChange = (newPace: Pace) => {
     setPace(newPace);
+    // The summer filter only exists for the summer pace.
+    if (newPace !== 'INCLUDE_SUMMER' && filterTerm === 'SUMMER') setFilterTerm('ALL');
     loadPlan(newPace, true);
   };
 
@@ -119,13 +136,7 @@ export const StudyPlanView: React.FC<StudyPlanViewProps> = ({ onNavigateTab }) =
     }
   };
 
-  const handleRegisterSemesterCourses = (sem: PlannedSemester) => {
-    try {
-      const courseCodes = sem.courses.map(c => c.courseCode);
-      localStorage.setItem(`staged_recovery_courses_${studentId}`, JSON.stringify(courseCodes));
-      localStorage.setItem('staged_recovery_courses', JSON.stringify(courseCodes));
-    } catch {}
-
+  const goToRegistration = () => {
     if (onNavigateTab) {
       onNavigateTab('student-registration');
     } else {
@@ -133,35 +144,34 @@ export const StudyPlanView: React.FC<StudyPlanViewProps> = ({ onNavigateTab }) =
     }
   };
 
+  const handleRegisterSemesterCourses = (sem: PlannedSemester) => {
+    try {
+      const courseCodes = sem.courses.map(c => c.courseCode);
+      localStorage.setItem(`staged_recovery_courses_${studentId}`, JSON.stringify(courseCodes));
+      localStorage.setItem('staged_recovery_courses', JSON.stringify(courseCodes));
+    } catch {}
+    goToRegistration();
+  };
+
+  const handleEnrolSingleCourse = (course: PlannedCourse) => {
+    try {
+      localStorage.setItem(`staged_recovery_courses_${studentId}`, JSON.stringify([course.courseCode]));
+      localStorage.setItem('staged_recovery_courses', JSON.stringify([course.courseCode]));
+    } catch {}
+    setActiveCourseModal(null);
+    goToRegistration();
+  };
+
   const handlePrint = () => {
     window.print();
   };
 
-  const statusBadge: Record<string, string> = {
-    'Draft': 'bg-slate-100 text-slate-700 border-slate-200',
-    'Pending Review': 'bg-amber-50 text-amber-800 border-amber-200 animate-pulse',
-    'Approved': 'bg-emerald-50 text-emerald-800 border-emerald-200',
-    'Rejected': 'bg-rose-50 text-rose-800 border-rose-200',
-  };
-
-  const statusLabel: Record<string, { ar: string; en: string }> = {
-    'Draft': { ar: 'مسودة قيد الإعداد', en: 'Draft' },
-    'Pending Review': { ar: 'بانتظار مراجعة المرشد الأكاديمي', en: 'Pending Advisor Review' },
-    'Approved': { ar: 'معتمدة رسمياً من المرشد', en: 'Officially Approved' },
-    'Rejected': { ar: 'مرفوضة / بحاجة لتعديل', en: 'Changes Requested' },
-  };
-
-  // Find detailed course from catalog
-  const selectedCourseDetails = activeCourseModal
-    ? allCourses.find(c => c.code === activeCourseModal.courseCode)
-    : null;
-
-  // Unlocked courses calculation for selected modal course
+  // Catalogue details for the course open in the dialog
+  const selectedCourseDetails = activeCourseModal ? allCourses.find(c => c.code === activeCourseModal.courseCode) : null;
   const unlockedCourses = activeCourseModal
     ? allCourses.filter(c => c.prerequisites && c.prerequisites.includes(activeCourseModal.courseCode))
     : [];
 
-  // Filtered semesters based on tab
   const filteredSemesters = (plan?.semesters || []).filter(sem => {
     if (filterTerm === 'ALL') return true;
     if (filterTerm === 'YEAR_1') return sem.semesterIndex <= 2;
@@ -170,537 +180,469 @@ export const StudyPlanView: React.FC<StudyPlanViewProps> = ({ onNavigateTab }) =
     return true;
   });
 
-  if (loading) {
+  // First load: nothing to show yet.
+  if (loading && !plan) {
+    return <Loader label={t('جارٍ توزيع المقررات المتبقية على الفصول حتى التخرج…', 'Spreading your remaining courses across terms until graduation…')} />;
+  }
+
+  if (!plan) {
     return (
-      <div className="flex flex-col items-center justify-center p-16 space-y-3">
-        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600"></div>
-        <p className="text-xs text-slate-500 font-medium">
-          {t('جاري الحساب والتوليد الذكي لخطة التخرج بالكامل...', 'Generating full graduation timeline...')}
-        </p>
-      </div>
+      <Panel>
+        <EmptyState
+          icon={AlertTriangle}
+          tone="caution"
+          title={t('تعذر تحميل خطة التخرج', 'Your study plan could not be loaded')}
+          description={t('الخادم لم يرد. تأكد من الاتصال ثم أعد المحاولة.', 'The server did not respond. Check the connection and try again.')}
+          action={
+            <button type="button" onClick={() => loadPlan(pace, false)} className="btn btn-primary">
+              <RotateCcw aria-hidden="true" />
+              {t('إعادة المحاولة', 'Try again')}
+            </button>
+          }
+        />
+      </Panel>
     );
   }
 
-  if (!plan) return null;
-
-  const totalDegreeCredits = 134;
-  const completedCredits = student?.completedCredits ?? 56;
+  const totalDegreeCredits = INSTITUTION.totalCredits;
+  const completedCredits = student?.completedCredits ?? 0;
   const remainingHours = Math.max(0, totalDegreeCredits - completedCredits);
+  const completedPct = Math.round((completedCredits / totalDegreeCredits) * 100);
+  const lastSemester = plan.semesters[plan.semesters.length - 1];
+  const graduationGpa = typeof lastSemester?.expectedGpa === 'number' ? lastSemester.expectedGpa : null;
+  const expectedGraduation = language === 'ar' ? plan.expectedGraduationSemesterAr : plan.expectedGraduationSemesterEn;
+  const isLocked = plan.status === 'Approved' || plan.status === 'Pending Review';
+  const advisorName = personName(student?.advisorName, language) || t('مرشدك الأكاديمي', 'your academic advisor');
+  const statusTone = planStatusTone[plan.status] || 'ink';
+
+  // Borders between the figure cells, for 1 / 2 / 3–4 columns.
+  const cellBorder = ['', 'border-t sm:border-t-0 sm:border-s', 'border-t lg:border-t-0 lg:border-s', 'border-t sm:border-s lg:border-t-0'];
+
+  const figures: Array<{ label: string; value: React.ReactNode; hint: React.ReactNode }> = [
+    {
+      label: t('الساعات المنجزة', 'Credits completed'),
+      value: (
+        <>
+          {completedCredits}
+          <span className="text-[13px] font-medium text-ink-500"> / {totalDegreeCredits}</span>
+        </>
+      ),
+      hint: <Meter value={completedPct} tone="sign" label={t('نسبة الإنجاز', 'Progress')} className="mt-1" />,
+    },
+    {
+      label: t('الساعات المتبقية في الخطة', 'Credits left in the plan'),
+      value: plan.totalPlannedCredits,
+      hint: t(`تغطي ${remainingHours} ساعة متبقية للتخرج`, `Covers the ${remainingHours} credit hours you still need`),
+    },
+    {
+      label: t('فصول حتى التخرج', 'Terms to graduation'),
+      value: plan.semesters.length,
+      hint: (
+        <>
+          {t('التخرج المتوقع:', 'Expected graduation:')} <span className="font-bold text-sign-700">{expectedGraduation}</span>
+        </>
+      ),
+    },
+  ];
+  if (graduationGpa !== null) {
+    figures.push({
+      label: t('المعدل المتوقع عند التخرج', 'Expected GPA at graduation'),
+      value: graduationGpa.toFixed(2),
+      hint: t('حسب التقديرات المتوقعة لفصول الخطة', 'Based on the grades expected in the planned terms'),
+    });
+  }
+
+  const paceOptions = [
+    { value: 'NORMAL' as Pace, label: t('عادي (18 ساعة)', 'Normal (18 cr)') },
+    { value: 'LIGHT' as Pace, label: t('خفيف (12–15 ساعة)', 'Light (12–15 cr)') },
+    { value: 'INCLUDE_SUMMER' as Pace, label: t('مع الفصول الصيفية', 'With summer terms') },
+  ];
+
+  const termOptions = [
+    { value: 'ALL' as TermFilter, label: t('كل الفصول', 'All terms') },
+    { value: 'YEAR_1' as TermFilter, label: t('السنة الحالية', 'This year') },
+    { value: 'YEAR_2' as TermFilter, label: t('السنة القادمة', 'Next year') },
+    ...(pace === 'INCLUDE_SUMMER' ? [{ value: 'SUMMER' as TermFilter, label: t('الصيف فقط', 'Summers only') }] : []),
+  ];
 
   return (
     <div className="space-y-6">
-      {/* Printable Header (Visible only during print) */}
-      <div className="hidden print:block p-4 border-b border-slate-300 mb-6">
-        <div className="flex items-center justify-between">
+      {/* Printed letterhead (print only) */}
+      <div className="hidden border-b-2 border-ink-900 pb-4 print:block">
+        <div className="flex items-start justify-between gap-6">
           <div>
-            <h1 className="text-xl font-bold">كلية الحاسبات والمعلومات — جامعة القاهرة</h1>
-            <h2 className="text-sm font-semibold text-slate-700">الخطة الدراسية التراكمية للتخرج (نظام الساعات المعتمدة)</h2>
+            <p className="text-[15px] font-extrabold">{language === 'ar' ? INSTITUTION.universityAr : INSTITUTION.universityEn}</p>
+            <p className="text-[13px] font-semibold">{language === 'ar' ? INSTITUTION.facultyAr : INSTITUTION.facultyEn}</p>
+            <p className="mt-1 text-[13px]">
+              {t('الخطة الدراسية حتى التخرج', 'Study plan to graduation')} ({language === 'ar' ? INSTITUTION.programAr : INSTITUTION.programEn})
+            </p>
           </div>
-          <div className="text-right text-xs">
-            <p><strong>اسم الطالب:</strong> {student?.nameAr || 'عمر فاروق عبد الرحمن'}</p>
-            <p><strong>الرقم الجامعي:</strong> {student?.studentCode || '20230145'}</p>
-            <p><strong>المعدل التراكمي:</strong> {student?.cumulativeGpa || '1.78'}</p>
-            <p><strong>المرشد الأكاديمي:</strong> {student?.advisorName || 'د. محمود صقر'}</p>
-          </div>
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-1 text-[12px]">
+            <dt className="text-ink-500">{t('الطالب', 'Student')}</dt>
+            <dd className="font-bold">{student ? personName(language === 'ar' ? student.nameAr : student.nameEn, language) : '—'}</dd>
+            <dt className="text-ink-500">{t('الرقم الجامعي', 'Student code')}</dt>
+            <dd className="font-bold">{student?.studentCode || '—'}</dd>
+            <dt className="text-ink-500">{t('المعدل التراكمي', 'Cumulative GPA')}</dt>
+            <dd className="font-bold">{student ? student.cumulativeGpa.toFixed(2) : '—'}</dd>
+            <dt className="text-ink-500">{t('المرشد الأكاديمي', 'Academic advisor')}</dt>
+            <dd className="font-bold">{student ? personName(student.advisorName, language) : '—'}</dd>
+            <dt className="text-ink-500">{t('حالة الخطة', 'Plan status')}</dt>
+            <dd className="font-bold">{pick(language, planStatusLabel[plan.status], plan.status)}</dd>
+          </dl>
         </div>
       </div>
 
-      {/* Header & Control Panel */}
-      <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-xs space-y-5 print:hidden">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div>
-            <div className="flex flex-wrap items-center gap-2 mb-1.5">
-              <CalendarDays className="w-5 h-5 text-indigo-600" />
-              <h2 className="text-lg font-bold text-slate-900">
-                {t('خطة التخرج الزمنية المقترحة ذكياً', 'AI-Generated Graduation Study Plan')}
-              </h2>
-              <span
-                className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
-                  statusBadge[plan.status] || 'bg-slate-100'
-                }`}
-              >
-                {language === 'ar' ? statusLabel[plan.status]?.ar : statusLabel[plan.status]?.en}
-              </span>
-            </div>
-            <p className="text-xs text-slate-500 leading-relaxed">
+      <PageHeader
+        icon={Route}
+        title={t('خطة التخرج', 'Study plan to graduation')}
+        description={t(
+          'المقررات المتبقية موزعة على الفصول القادمة بترتيب يحترم المتطلبات السابقة وحد الساعات لكل فصل.',
+          'Your remaining courses, spread over the coming terms in an order that respects prerequisites and each term’s credit limit.'
+        )}
+        meta={
+          <>
+            <span className={chipClass[statusTone]}>{pick(language, planStatusLabel[plan.status], plan.status)}</span>
+            <Chip tone="ink" icon={CalendarCheck}>
+              {t(`التخرج المتوقع: ${expectedGraduation}`, `Expected graduation: ${expectedGraduation}`)}
+            </Chip>
+          </>
+        }
+        actions={
+          <>
+            <button type="button" onClick={handlePrint} className="btn btn-secondary">
+              <Printer aria-hidden="true" />
+              {t('طباعة الخطة', 'Print plan')}
+            </button>
+            <button type="button" onClick={handleRegeneratePlan} disabled={submitting || loading} className="btn btn-secondary">
+              <RotateCcw aria-hidden="true" />
+              {t('أعد التوزيع', 'Rebuild plan')}
+            </button>
+            {isLocked ? (
+              <button type="button" onClick={handleResetToDraft} disabled={submitting} className="btn btn-soft">
+                <PencilLine aria-hidden="true" />
+                {t('أعدها مسودة للتعديل', 'Reopen as a draft')}
+              </button>
+            ) : (
+              <button type="button" onClick={handleSubmitPlan} disabled={submitting} className="btn btn-primary">
+                <Send aria-hidden="true" className="rtl:-scale-x-100" />
+                {submitting ? t('جارٍ الإرسال…', 'Sending…') : t('أرسل الخطة للمرشد', 'Send to advisor')}
+              </button>
+            )}
+          </>
+        }
+      />
+
+      {submittedSuccess && (
+        <div className="callout callout-sign print:hidden" role="status">
+          <CheckCircle2 aria-hidden="true" />
+          <div className="flex-1">
+            <p className="font-bold">{t('أُرسلت خطتك إلى المرشد الأكاديمي.', 'Your plan was sent to your academic advisor.')}</p>
+            <p>
               {t(
-                `تاريخ التخرج المتوقع: ${language === 'ar' ? plan.expectedGraduationSemesterAr : plan.expectedGraduationSemesterEn} | إجمالي الساعات المخططة للتخرج: ${plan.totalPlannedCredits} ساعة معتمدة موزعة على ${plan.semesters.length} فصول.`,
-                `Expected Graduation: ${plan.expectedGraduationSemesterEn} | Total Planned Credits: ${plan.totalPlannedCredits} hrs across ${plan.semesters.length} terms.`
+                `أُبلغ ${advisorName} بمراجعة الخطة واعتمادها، وسيصلك إشعار عند صدور القرار.`,
+                `${advisorName} has been asked to review and approve it; you will get a notification when they decide.`
               )}
             </p>
           </div>
-
-          {/* Action Tools */}
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={handlePrint}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 transition cursor-pointer"
-              title={t('طباعة الخطة الرسمية', 'Print official plan')}
-            >
-              <Printer className="w-3.5 h-3.5" />
-              <span>{t('طباعة / تصدير', 'Print / Export')}</span>
-            </button>
-
-            <button
-              onClick={handleRegeneratePlan}
-              disabled={submitting}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 transition cursor-pointer"
-              title={t('إعادة توليد وتوزيع المقررات', 'Regenerate timeline')}
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>{t('إعادة توليد', 'Regenerate')}</span>
-            </button>
-
-            {plan.status === 'Approved' || plan.status === 'Pending Review' ? (
-              <button
-                onClick={handleResetToDraft}
-                disabled={submitting}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 transition cursor-pointer"
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>{t('تعديل الخطة وإعادة الضبط', 'Modify & Redraft')}</span>
-              </button>
-            ) : (
-              <button
-                disabled={submitting}
-                onClick={handleSubmitPlan}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs transition cursor-pointer"
-              >
-                <Send className="w-3.5 h-3.5" />
-                <span>{t('إرسال الخطة للمرشد للاعتماد', 'Submit to Advisor')}</span>
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Pacing Filters Bar */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-slate-100">
-          <div className="flex items-center gap-2">
-            <SlidersHorizontal className="w-4 h-4 text-slate-400 shrink-0" />
-            <span className="text-xs font-bold text-slate-600">{t('سرعة وعبء الفصول:', 'Pacing & Load:')}</span>
-            <div className="flex flex-wrap items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
-              <button
-                onClick={() => handlePaceChange('NORMAL')}
-                className={`px-3 py-1 rounded-lg text-xs font-semibold transition cursor-pointer ${
-                  pace === 'NORMAL' ? 'bg-white text-indigo-900 shadow-xs font-bold' : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                {t('المعدل الطبيعي (18)', 'Normal (18h)')}
-              </button>
-              <button
-                onClick={() => handlePaceChange('LIGHT')}
-                className={`px-3 py-1 rounded-lg text-xs font-semibold transition cursor-pointer ${
-                  pace === 'LIGHT' ? 'bg-white text-indigo-900 shadow-xs font-bold' : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                {t('عبء خفيف (12-15)', 'Light Load (12-15h)')}
-              </button>
-              <button
-                onClick={() => handlePaceChange('INCLUDE_SUMMER')}
-                className={`px-3 py-1 rounded-lg text-xs font-semibold transition cursor-pointer ${
-                  pace === 'INCLUDE_SUMMER' ? 'bg-white text-indigo-900 shadow-xs font-bold' : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                {t('تضمين فصول الصيف (تسريع التخرج)', 'Accelerate with Summer')}
-              </button>
-            </div>
-          </div>
-
-          {/* Quick Filter by Term */}
-          <div className="flex items-center gap-1 text-[11px] font-semibold text-slate-500">
-            <span>{t('عرض:', 'View:')}</span>
-            <button
-              onClick={() => setFilterTerm('ALL')}
-              className={`px-2 py-0.5 rounded-md transition cursor-pointer ${
-                filterTerm === 'ALL' ? 'bg-slate-200 text-slate-900 font-bold' : 'hover:bg-slate-100'
-              }`}
-            >
-              {t('كل الفصول', 'All')}
-            </button>
-            <button
-              onClick={() => setFilterTerm('YEAR_1')}
-              className={`px-2 py-0.5 rounded-md transition cursor-pointer ${
-                filterTerm === 'YEAR_1' ? 'bg-slate-200 text-slate-900 font-bold' : 'hover:bg-slate-100'
-              }`}
-            >
-              {t('السنة الحالية', 'Year 1')}
-            </button>
-            <button
-              onClick={() => setFilterTerm('YEAR_2')}
-              className={`px-2 py-0.5 rounded-md transition cursor-pointer ${
-                filterTerm === 'YEAR_2' ? 'bg-slate-200 text-slate-900 font-bold' : 'hover:bg-slate-100'
-              }`}
-            >
-              {t('السنة القادمة', 'Year 2')}
-            </button>
-            {pace === 'INCLUDE_SUMMER' && (
-              <button
-                onClick={() => setFilterTerm('SUMMER')}
-                className={`px-2 py-0.5 rounded-md transition cursor-pointer ${
-                  filterTerm === 'SUMMER' ? 'bg-amber-100 text-amber-900 font-bold' : 'hover:bg-slate-100'
-                }`}
-              >
-                {t('فصول الصيف', 'Summer Only')}
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* KPI Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 print:hidden">
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-          <span className="text-[11px] font-bold text-slate-400 block mb-1">
-            {t('الساعات المنجزة رسمياً', 'Completed Credits')}
-          </span>
-          <div className="flex items-baseline gap-1.5">
-            <span className="text-2xl font-extrabold text-emerald-600 font-mono">{completedCredits}</span>
-            <span className="text-xs text-slate-400">/ {totalDegreeCredits} {t('ساعة', 'hrs')}</span>
-          </div>
-          <div className="w-full bg-slate-100 h-1.5 rounded-full mt-2 overflow-hidden">
-            <div
-              className="bg-emerald-500 h-full rounded-full transition-all duration-500"
-              style={{ width: `${Math.round((completedCredits / totalDegreeCredits) * 100)}%` }}
-            ></div>
-          </div>
-        </div>
-
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-          <span className="text-[11px] font-bold text-slate-400 block mb-1">
-            {t('الساعات المخططة المتبقية', 'Planned Remaining')}
-          </span>
-          <div className="flex items-baseline gap-1.5">
-            <span className="text-2xl font-extrabold text-indigo-600 font-mono">{plan.totalPlannedCredits}</span>
-            <span className="text-xs text-slate-400">{t('ساعة معتمدة', 'credits')}</span>
-          </div>
-          <span className="text-[10px] text-slate-500 block mt-1">
-            {t(`تغطي كافة متطلبات التخرج الـ ${remainingHours} المتبقية`, `Covers all ${remainingHours} required hours`)}
-          </span>
-        </div>
-
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-          <span className="text-[11px] font-bold text-slate-400 block mb-1">
-            {t('عدد الفصول حتى التخرج', 'Terms to Graduation')}
-          </span>
-          <div className="flex items-baseline gap-1.5">
-            <span className="text-2xl font-extrabold text-slate-800 font-mono">{plan.semesters.length}</span>
-            <span className="text-xs text-slate-400">{t('فصول دراسية', 'semesters')}</span>
-          </div>
-          <span className="text-[10px] text-emerald-600 font-bold block mt-1">
-            {language === 'ar' ? `الموعد: ${plan.expectedGraduationSemesterAr}` : `Target: ${plan.expectedGraduationSemesterEn}`}
-          </span>
-        </div>
-
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-          <span className="text-[11px] font-bold text-slate-400 block mb-1">
-            {t('المعدل المتوقع عند التخرج', 'Target Graduation GPA')}
-          </span>
-          <div className="flex items-baseline gap-1.5">
-            <span className="text-2xl font-extrabold text-purple-600 font-mono">2.45+</span>
-            <span className="text-xs text-slate-400">{t('نقطة', 'pts')}</span>
-          </div>
-          <span className="text-[10px] text-purple-700 font-bold block mt-1">
-            {t('خروج آمن ومؤكد من الإنذار الأكاديمي', 'Safe exit from academic warning')}
-          </span>
-        </div>
-      </div>
-
-      {submittedSuccess && (
-        <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex items-center justify-between gap-3 text-xs text-emerald-900 shadow-sm animate-in fade-in">
-          <div className="flex items-center gap-3">
-            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-            <div>
-              <p className="font-bold">{t('تم إرسال الخطة الدراسية بنجاح إلى المرشد الأكاديمي!', 'Study Plan Successfully Submitted to Advisor!')}</p>
-              <p className="text-[11px] text-emerald-700 mt-0.5">
-                {t('تم إشعار د. محمود صقر لمراجعة الخطة والاعتماد، وستصلك إفادة فور المصادقة.', 'Dr. Mahmoud Saqr was notified for official review and approval.')}
-              </p>
-            </div>
-          </div>
           <button
+            type="button"
             onClick={() => setSubmittedSuccess(false)}
-            className="text-emerald-700 hover:text-emerald-900 text-xs font-bold"
+            className="-m-1 h-8 w-8 shrink-0 rounded-lg p-1.5 text-sign-700 transition hover:bg-sign-100"
+            aria-label={t('إغلاق الرسالة', 'Dismiss message')}
           >
-            ✕
+            <X className="h-5 w-5" />
           </button>
         </div>
       )}
 
-      {/* Interactive Helper Banner */}
-      <div className="bg-indigo-50/70 border border-indigo-100 rounded-2xl p-3.5 flex items-center justify-between gap-3 text-xs text-indigo-900 print:hidden">
-        <div className="flex items-center gap-2.5">
-          <Sparkles className="w-4 h-4 text-indigo-600 shrink-0" />
-          <span>
-            {t(
-              '💡 اضغط على أي مقرر للاطلاع على المتطلبات السابقة، والمقررات التي يفتحها، وتفاصيل الشعب. يمكنك تسجيل مقررات الفصل القادم بضغطة زر واحدة.',
-              '💡 Click on any course card to inspect prerequisites, unlocked courses, and section info. Register Semester 1 with a single click.'
-            )}
-          </span>
-        </div>
-      </div>
-
-      {/* Timeline Semesters Grid */}
-      <div className="space-y-5">
-        {filteredSemesters.map((sem) => {
-          const isSummer = sem.type === 'SUMMER';
-          const isFirstSemester = sem.semesterIndex === 1;
-
-          return (
-            <div
-              key={sem.semesterIndex}
-              className={`bg-white rounded-3xl p-6 border transition-all ${
-                isFirstSemester
-                  ? 'border-indigo-400 ring-2 ring-indigo-100 shadow-md'
-                  : isSummer
-                  ? 'border-amber-200 bg-amber-50/15 shadow-xs'
-                  : 'border-slate-200 shadow-xs hover:border-slate-300'
-              }`}
-            >
-              {/* Semester Header */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3.5 mb-4 gap-3">
-                <div className="flex items-center gap-3">
-                  <div
-                    className={`w-9 h-9 rounded-2xl flex items-center justify-center font-bold text-sm shadow-xs ${
-                      isFirstSemester
-                        ? 'bg-indigo-600 text-white'
-                        : isSummer
-                        ? 'bg-amber-500 text-white'
-                        : 'bg-slate-100 text-slate-700'
-                    }`}
-                  >
-                    #{sem.semesterIndex}
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-base font-bold text-slate-900">
-                        {language === 'ar' ? sem.semesterNameAr : sem.semesterNameEn}
-                      </h3>
-                      {isFirstSemester && (
-                        <span className="text-[10px] font-bold bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded-full">
-                          {t('الفصل الدراسي القادم للتسجيل', 'Upcoming Term')}
-                        </span>
-                      )}
-                    </div>
-                    <span className="text-[11px] text-slate-500">
-                      {isSummer
-                        ? t('فصل صيفي مكثف (8 أسابيع)', 'Intensive Summer Term (8 Weeks)')
-                        : t('فصل نظامي كامل (15 أسبوع)', 'Regular Academic Semester (15 Weeks)')}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-3">
-                  <div className="bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 text-xs flex items-center gap-3">
-                    <span className="text-slate-500">
-                      {t('إجمالي الساعات: ', 'Credits: ')}
-                      <strong className="text-slate-900 font-mono text-sm">{sem.totalCredits}</strong>
-                    </span>
-                    <span className="text-slate-300">|</span>
-                    <span className="text-slate-500">
-                      {t('المعدل المتوقع: ', 'Exp. GPA: ')}
-                      <strong className="text-emerald-600 font-mono text-sm">{sem.expectedGpa?.toFixed(2) || '2.30'}</strong>
-                    </span>
-                  </div>
-
-                  {/* Direct Registration Shortcut on Semester 1 */}
-                  {isFirstSemester && (
-                    <button
-                      onClick={() => handleRegisterSemesterCourses(sem)}
-                      className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white transition flex items-center gap-1.5 shadow-sm cursor-pointer print:hidden"
-                    >
-                      <CalendarCheck className="w-3.5 h-3.5" />
-                      <span>{t('تسجيل مقررات هذا الفصل في التسجيل الفصلي', 'Enroll This Term Courses')}</span>
-                      {language === 'ar' ? <ArrowLeft className="w-3.5 h-3.5" /> : <ArrowRight className="w-3.5 h-3.5" />}
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Courses in this semester */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3.5">
-                {sem.courses.map((course, cIdx) => (
-                  <div
-                    key={`${course.courseCode}_${cIdx}`}
-                    onClick={() => setActiveCourseModal(course)}
-                    className="p-3.5 rounded-2xl border border-slate-200 bg-white hover:border-indigo-300 hover:shadow-md transition-all cursor-pointer flex flex-col justify-between group"
-                  >
-                    <div>
-                      <div className="flex items-center justify-between mb-1.5">
-                        <span className="font-mono text-xs font-extrabold text-indigo-700 px-2 py-0.5 rounded-md bg-indigo-50 border border-indigo-100 group-hover:bg-indigo-600 group-hover:text-white transition">
-                          {course.courseCode}
-                        </span>
-                        <span className="text-[11px] font-bold text-slate-500">
-                          {course.credits} {t('ساعات', 'hrs')}
-                        </span>
-                      </div>
-                      <div className="text-xs font-bold text-slate-900 leading-snug line-clamp-2 mt-1">
-                        {language === 'ar' ? course.courseNameAr : course.courseNameEn}
-                      </div>
-                    </div>
-
-                    <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between text-[10px]">
-                      {course.isRetake ? (
-                        <span className="text-rose-700 font-bold bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded flex items-center gap-1">
-                          <Flame className="w-3 h-3 text-rose-500" />
-                          {t('إعادة تحسين', 'Retake')}
-                        </span>
-                      ) : (
-                        <span className="text-slate-500 font-medium bg-slate-50 px-1.5 py-0.5 rounded">
-                          {course.isMandatory ? t('إجباري', 'Required') : t('اختياري', 'Elective')}
-                        </span>
-                      )}
-
-                      <span className="text-indigo-600 opacity-0 group-hover:opacity-100 transition font-bold flex items-center gap-0.5">
-                        {t('تفاصيل', 'Details')}
-                        <ChevronRight className="w-3 h-3" />
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Course Detail Modal */}
-      {activeCourseModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-in fade-in duration-200 print:hidden">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-5 animate-in zoom-in-95 duration-150">
-            {/* Modal Header */}
-            <div className="flex items-start justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-700 flex items-center justify-center border border-indigo-100 font-mono font-black text-sm shrink-0">
-                  {activeCourseModal.courseCode}
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-slate-900 leading-snug">
-                    {language === 'ar' ? activeCourseModal.courseNameAr : activeCourseModal.courseNameEn}
-                  </h3>
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className="text-xs font-bold text-slate-500 font-mono">
-                      {activeCourseModal.credits} {t('ساعات معتمدة', 'Credit Hours')}
-                    </span>
-                    <span className="text-slate-300">•</span>
-                    <span className="text-xs text-indigo-600 font-medium">
-                      {selectedCourseDetails?.department || t('علوم الحاسب', 'Computer Science')}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <button
-                onClick={() => setActiveCourseModal(null)}
-                className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Course Badges & Attributes */}
-            <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 space-y-3">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-slate-500">{t('طبيعة المقرر:', 'Course Nature:')}</span>
-                <span className="font-bold text-slate-800">
-                  {activeCourseModal.isMandatory ? t('إجباري تخصص للدرجة العلمية', 'Mandatory Degree Requirement') : t('اختياري معتمد', 'Elective')}
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-slate-500">{t('حالة الطالب في المقرر:', 'Student Status:')}</span>
-                {activeCourseModal.isRetake ? (
-                  <span className="font-bold text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-200 flex items-center gap-1">
-                    <Flame className="w-3 h-3 text-rose-500" />
-                    {t('إعادة لتحسين المعدل وإلغاء الإنذار (تسقف عند B+)', 'Retake (Capped at B+)')}
-                  </span>
-                ) : (
-                  <span className="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                    {t('تسجيل لأول مرة (استيفاء ساعات نظامية)', 'First-Time Enrollment')}
-                  </span>
-                )}
-              </div>
-
-              {/* Prerequisites */}
-              <div className="pt-2 border-t border-slate-200">
-                <span className="text-[11px] font-bold text-slate-600 block mb-1.5">
-                  {t('المتطلبات السابقة للمقرر:', 'Course Prerequisites:')}
-                </span>
-                {selectedCourseDetails?.prerequisites && selectedCourseDetails.prerequisites.length > 0 ? (
-                  <div className="flex flex-wrap gap-1.5">
-                    {selectedCourseDetails.prerequisites.map(p => {
-                      const isPassed = student?.records.some(r => r.courseCode === p && r.status === 'PASSED');
-                      return (
-                        <span
-                          key={p}
-                          className={`font-mono text-xs font-bold px-2 py-1 rounded-lg border flex items-center gap-1 ${
-                            isPassed
-                              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                              : 'bg-amber-50 text-amber-800 border-amber-200'
-                          }`}
-                        >
-                          {isPassed ? '✓ ' : '⏳ '}
-                          {p}
-                        </span>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <span className="text-xs text-slate-400">
-                    {t('لا توجد متطلبات سابقة (مقرر مستوى أولي)', 'No prerequisites required.')}
-                  </span>
-                )}
-              </div>
-
-              {/* Unlocked Courses */}
-              {unlockedCourses.length > 0 && (
-                <div className="pt-2 border-t border-slate-200">
-                  <span className="text-[11px] font-bold text-slate-600 block mb-1.5">
-                    {t(`يفتح هذا المقرر (${unlockedCourses.length}) مقررات لاحقة:`, `Unlocks (${unlockedCourses.length}) future courses:`)}
-                  </span>
-                  <div className="flex flex-wrap gap-1.5">
-                    {unlockedCourses.map(u => (
-                      <span
-                        key={u.code}
-                        className="font-mono text-[11px] font-semibold bg-white text-indigo-700 border border-slate-200 px-2 py-0.5 rounded-md"
-                        title={language === 'ar' ? u.nameAr : u.nameEn}
-                      >
-                        {u.code}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Actions in Modal */}
-            <div className="flex flex-col sm:flex-row gap-2 pt-1">
-              <button
-                onClick={() => {
-                  try {
-                    localStorage.setItem(`staged_recovery_courses_${studentId}`, JSON.stringify([activeCourseModal.courseCode]));
-                    localStorage.setItem('staged_recovery_courses', JSON.stringify([activeCourseModal.courseCode]));
-                  } catch {}
-                  setActiveCourseModal(null);
-                  if (onNavigateTab) {
-                    onNavigateTab('student-registration');
-                  } else {
-                    navigate('/student/registration');
-                  }
-                }}
-                className="flex-1 py-2.5 px-4 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white transition flex items-center justify-center gap-2 cursor-pointer shadow-sm"
-              >
-                <CalendarCheck className="w-4 h-4" />
-                <span>{t('تسجيل هذا المقرر في التسجيل الفصلي', 'Enroll in Registration')}</span>
-              </button>
-
-              <button
-                onClick={() => setActiveCourseModal(null)}
-                className="py-2.5 px-4 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 transition cursor-pointer"
-              >
-                {t('إغلاق', 'Close')}
-              </button>
-            </div>
+      {plan.advisorNotes && (
+        <div className={cn('callout print:hidden', plan.status === 'Rejected' ? 'callout-signal' : 'callout-lane')}>
+          <MessageSquareText aria-hidden="true" />
+          <div>
+            <p className="font-bold">
+              {plan.status === 'Rejected'
+                ? t('طلب مرشدك تعديلات على الخطة', 'Your advisor asked for changes')
+                : t('ملاحظات مرشدك على الخطة', 'Your advisor’s notes on the plan')}
+            </p>
+            <p>{plan.advisorNotes}</p>
           </div>
         </div>
+      )}
+
+      {/* Pace + term filter */}
+      <Panel className="print:hidden">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+          <div>
+            <p className="field-label">{t('سرعة الخطة', 'Plan pace')}</p>
+            <Segmented<Pace> ariaLabel={t('سرعة الخطة', 'Plan pace')} value={pace} onChange={handlePaceChange} options={paceOptions} />
+          </div>
+          <div>
+            <p className="field-label">{t('عرض', 'Show')}</p>
+            <Segmented<TermFilter> ariaLabel={t('الفصول المعروضة', 'Terms shown')} value={filterTerm} onChange={setFilterTerm} options={termOptions} />
+          </div>
+        </div>
+        <p className="mt-4 flex items-start gap-2 text-[12.5px] leading-6 text-ink-500">
+          <Info className="mt-1 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          {t(
+            'اضغط على أي مقرر لترى متطلباته السابقة والمقررات التي يفتحها، ويمكنك نقل مقررات الفصل القادم إلى التسجيل مباشرة.',
+            'Select any course to see its prerequisites and what it unlocks. You can carry next term’s courses straight to registration.'
+          )}
+        </p>
+      </Panel>
+
+      {/* Figures */}
+      <Panel padded={false} className={cn('grid grid-cols-1 overflow-hidden sm:grid-cols-2 print:hidden', figures.length === 4 ? 'lg:grid-cols-4' : 'lg:grid-cols-3')}>
+        {figures.map((f, i) => (
+          <div key={f.label} className={cn('border-ink-100 px-5 py-4', cellBorder[i])}>
+            <span className="text-[12.5px] font-medium text-ink-500">{f.label}</span>
+            <div className="t-num mt-1 text-[28px] font-extrabold leading-tight text-ink-950">{f.value}</div>
+            <div className="mt-1.5 text-[12px] leading-5 text-ink-500">{f.hint}</div>
+          </div>
+        ))}
+      </Panel>
+
+      {/* The route, term by term */}
+      <div className="relative">
+        {loading && (
+          <div className="absolute inset-0 z-[2] grid place-items-start justify-center rounded-2xl bg-platform/70 pt-16 backdrop-blur-[1px]">
+            <Loader compact label={t('جارٍ تحديث الخطة…', 'Updating the plan…')} />
+          </div>
+        )}
+
+        {filteredSemesters.length === 0 ? (
+          <Panel>
+            <EmptyState
+              icon={CalendarCheck}
+              title={t('لا توجد فصول في هذا العرض', 'No terms in this view')}
+              description={t('اختر «كل الفصول» لعرض الخطة كاملة.', 'Choose “All terms” to see the whole plan.')}
+              action={
+                <button type="button" onClick={() => setFilterTerm('ALL')} className="btn btn-secondary btn-sm">
+                  {t('كل الفصول', 'All terms')}
+                </button>
+              }
+            />
+          </Panel>
+        ) : (
+          <ol aria-label={t('فصول الخطة بالترتيب', 'Plan terms in order')}>
+            {filteredSemesters.map((sem, i) => {
+              const isSummer = sem.type === 'SUMMER';
+              const isNext = sem.semesterIndex === 1;
+              const isFinal = sem.semesterIndex === plan.semesters.length;
+              const isLast = i === filteredSemesters.length - 1;
+              const semName = language === 'ar' ? sem.semesterNameAr : sem.semesterNameEn;
+              const riskNote = language === 'ar' ? sem.riskNoteAr : sem.riskNoteEn;
+              return (
+                <li key={sem.semesterIndex} className="relative grid grid-cols-[2rem_minmax(0,1fr)] gap-3 pb-5 sm:grid-cols-[2.5rem_minmax(0,1fr)] sm:gap-4">
+                  {!isLast && (
+                    <span
+                      aria-hidden="true"
+                      className="absolute -bottom-[29px] start-[14.5px] top-[29px] w-[3px] rounded-full bg-sign-600 sm:start-[18.5px]"
+                    />
+                  )}
+                  <div className={cn('relative z-[1] flex justify-center', isNext ? 'pt-[18px]' : 'pt-5')} aria-hidden="true">
+                    {isNext ? (
+                      <span className="h-[22px] w-[22px] rounded-full border-[4px] border-sign-600 bg-route-400 shadow-[0_0_0_5px_rgb(255_199_44/0.3)]" />
+                    ) : (
+                      <span
+                        className={cn(
+                          'h-[18px] w-[18px] rounded-full border-[4px] bg-paper',
+                          isSummer ? 'border-caution-500' : isFinal ? 'border-sign-600 bg-sign-600' : 'border-sign-600'
+                        )}
+                      />
+                    )}
+                  </div>
+
+                  <Panel padded={false} as="article" className={cn('overflow-hidden', isNext && 'border-ink-900 ring-2 ring-route-400/60')}>
+                    <div className="flex flex-col gap-3 border-b border-ink-100 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h2 className="text-[16px] font-bold text-ink-950">{semName}</h2>
+                          {isNext && <Chip tone="route">{t('الفصل القادم', 'Next term')}</Chip>}
+                          {isSummer && <Chip tone="caution">{t('فصل صيفي', 'Summer term')}</Chip>}
+                          {isFinal && <Chip tone="sign">{t('فصل التخرج', 'Graduation term')}</Chip>}
+                        </div>
+                        <p className="text-[12.5px] text-ink-500">
+                          {isSummer ? t('فصل مكثف مدته 8 أسابيع', 'An intensive 8-week term') : t('فصل نظامي مدته 15 أسبوعاً', 'A regular 15-week term')}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+                        <dl className="flex items-center gap-5 text-[12.5px]">
+                          <div>
+                            <dt className="text-ink-500">{t('الساعات', 'Credits')}</dt>
+                            <dd className="t-num text-[15px] font-extrabold text-ink-900">{sem.totalCredits}</dd>
+                          </div>
+                          {typeof sem.expectedGpa === 'number' && (
+                            <div>
+                              <dt className="text-ink-500">{t('المعدل المتوقع', 'Expected GPA')}</dt>
+                              <dd className="t-num text-[15px] font-extrabold text-sign-700">{sem.expectedGpa.toFixed(2)}</dd>
+                            </div>
+                          )}
+                        </dl>
+                        {isNext && (
+                          <button type="button" onClick={() => handleRegisterSemesterCourses(sem)} className="btn btn-primary btn-sm">
+                            <CalendarCheck aria-hidden="true" />
+                            {t('انقل مقررات هذا الفصل إلى التسجيل', 'Carry these courses to registration')}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {riskNote && (
+                      <p className="flex items-start gap-2 border-b border-ink-100 bg-caution-50 px-4 py-2.5 text-[12.5px] leading-6 text-caution-800 sm:px-5">
+                        <AlertTriangle className="mt-1 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                        {riskNote}
+                      </p>
+                    )}
+
+                    <ul className="grid grid-cols-1 gap-2.5 p-4 sm:grid-cols-2 sm:p-5 xl:grid-cols-3 2xl:grid-cols-5">
+                      {sem.courses.map((course, cIdx) => {
+                        const name = language === 'ar' ? course.courseNameAr : course.courseNameEn;
+                        return (
+                          <li key={`${course.courseCode}_${cIdx}`}>
+                            <button
+                              type="button"
+                              onClick={() => setActiveCourseModal(course)}
+                              className="group flex h-full w-full flex-col gap-2 rounded-xl border border-ink-200 bg-paper p-3 text-start transition hover:border-ink-400 hover:bg-ink-50"
+                              aria-label={t(`تفاصيل ${course.courseCode} ${name}`, `Details for ${course.courseCode} ${name}`)}
+                            >
+                              <span className="flex items-center justify-between gap-2">
+                                <CodeBadge code={course.courseCode} variant={course.isRetake ? 'signal' : 'soft'} />
+                                <span className="t-num text-[12px] text-ink-500">{t(`${course.credits} س`, `${course.credits} cr`)}</span>
+                              </span>
+                              <span className="line-clamp-2 text-[13px] font-semibold leading-6 text-ink-900">{name}</span>
+                              <span className="mt-auto flex items-center justify-between gap-2">
+                                {course.isRetake ? (
+                                  <Chip tone="signal" icon={Flame}>
+                                    {t('إعادة', 'Retake')}
+                                  </Chip>
+                                ) : (
+                                  <Chip tone={course.isMandatory ? 'ink' : 'lane'}>
+                                    {course.isMandatory ? t('إجباري', 'Required') : t('اختياري', 'Elective')}
+                                  </Chip>
+                                )}
+                                <span className="text-[11.5px] font-semibold text-ink-400 transition group-hover:text-ink-700">
+                                  {t('التفاصيل', 'Details')}
+                                </span>
+                              </span>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </Panel>
+                </li>
+              );
+            })}
+          </ol>
+        )}
+      </div>
+
+      {/* Course details */}
+      {activeCourseModal && (
+        <Modal
+          onClose={() => setActiveCourseModal(null)}
+          size="md"
+          icon={BookOpen}
+          title={language === 'ar' ? activeCourseModal.courseNameAr : activeCourseModal.courseNameEn}
+          subtitle={
+            <span className="inline-flex flex-wrap items-center gap-2">
+              <CodeBadge code={activeCourseModal.courseCode} />
+              <span>{t(`${activeCourseModal.credits} ساعات معتمدة`, `${activeCourseModal.credits} credit hours`)}</span>
+              <span className="text-ink-300" aria-hidden="true">|</span>
+              <span>{selectedCourseDetails?.department || t('علوم الحاسب', 'Computer Science')}</span>
+            </span>
+          }
+          closeLabel={t('إغلاق', 'Close')}
+          footer={
+            <>
+              <button type="button" onClick={() => setActiveCourseModal(null)} className="btn btn-ghost">
+                {t('إغلاق', 'Close')}
+              </button>
+              <button type="button" onClick={() => handleEnrolSingleCourse(activeCourseModal)} className="btn btn-primary">
+                <CalendarCheck aria-hidden="true" />
+                {t('سجّل هذا المقرر', 'Register this course')}
+              </button>
+            </>
+          }
+        >
+          <div className="space-y-5 text-[13px]">
+            {(selectedCourseDetails?.descriptionAr || selectedCourseDetails?.descriptionEn) && (
+              <p className="leading-7 text-ink-700">
+                {language === 'ar' ? selectedCourseDetails?.descriptionAr : selectedCourseDetails?.descriptionEn}
+              </p>
+            )}
+
+            <dl className="grid grid-cols-1 gap-3 rounded-xl border border-ink-200 bg-ink-50 p-4 sm:grid-cols-2">
+              <div className="kv">
+                <dt>{t('نوع المقرر', 'Course type')}</dt>
+                <dd>
+                  {activeCourseModal.isMandatory
+                    ? t('إجباري لمتطلبات الدرجة', 'Required for the degree')
+                    : t('اختياري معتمد', 'Approved elective')}
+                </dd>
+              </div>
+              <div className="kv">
+                <dt>{t('وضعك في المقرر', 'Your status')}</dt>
+                <dd className={activeCourseModal.isRetake ? 'text-signal-600' : 'text-sign-700'}>
+                  {activeCourseModal.isRetake ? (
+                    <>
+                      {t('إعادة لرفع المعدل؛ أعلى تقدير ممكن', 'Retake to lift your GPA; the grade is capped at')}{' '}
+                      <bdi dir="ltr" className="whitespace-nowrap">
+                        B+
+                      </bdi>
+                    </>
+                  ) : (
+                    t('تسجيل لأول مرة', 'First attempt')
+                  )}
+                </dd>
+              </div>
+            </dl>
+
+            <section>
+              <h3 className="mb-2 text-[13.5px] font-bold text-ink-900">{t('المتطلبات السابقة', 'Prerequisites')}</h3>
+              {selectedCourseDetails?.prerequisites && selectedCourseDetails.prerequisites.length > 0 ? (
+                <ul className="flex flex-wrap gap-2">
+                  {selectedCourseDetails.prerequisites.map(p => {
+                    const isPassed = !!student?.records.some(r => r.courseCode === p && r.status === 'PASSED');
+                    return (
+                      <li key={p} className={cn(chipClass[isPassed ? 'sign' : 'caution'], '!h-7 !px-2.5')}>
+                        {isPassed ? <Check aria-hidden="true" /> : <Clock aria-hidden="true" />}
+                        <span dir="ltr">{p}</span>
+                        <span className="sr-only">{isPassed ? t('مجتاز', 'passed') : t('لم يُجتز بعد', 'not passed yet')}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <p className="text-ink-500">{t('لا يحتاج متطلبات سابقة.', 'No prerequisites.')}</p>
+              )}
+              {selectedCourseDetails?.prerequisites && selectedCourseDetails.prerequisites.length > 0 && (
+                <p className="mt-2 text-[12px] text-ink-500">
+                  {t('الأخضر مجتاز، والبرتقالي لم يُجتز بعد.', 'Green is passed; orange is not passed yet.')}
+                </p>
+              )}
+            </section>
+
+            <section>
+              <h3 className="mb-2 flex items-center gap-1.5 text-[13.5px] font-bold text-ink-900">
+                <KeyRound className="h-4 w-4 text-ink-500" aria-hidden="true" />
+                {unlockedCourses.length > 0
+                  ? t(`يفتح ${unlockedCourses.length} مقررات لاحقة`, `Unlocks ${unlockedCourses.length} later course${unlockedCourses.length === 1 ? '' : 's'}`)
+                  : t('لا يفتح مقررات أخرى', 'Does not unlock other courses')}
+              </h3>
+              {unlockedCourses.length > 0 && (
+                <ul className="space-y-1.5">
+                  {unlockedCourses.map(u => (
+                    <li key={u.code} className="flex items-center gap-2.5">
+                      <CodeBadge code={u.code} />
+                      <span className="text-ink-700">{language === 'ar' ? u.nameAr : u.nameEn}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          </div>
+        </Modal>
       )}
     </div>
   );

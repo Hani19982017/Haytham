@@ -10,8 +10,8 @@ import {
 import { AuthProvider, useAuth } from './context/AuthContext.js';
 import { LanguageProvider, useLanguage } from './context/LanguageContext.js';
 import { Header } from './components/common/Header.js';
-import { Sidebar } from './components/common/Sidebar.js';
 import { LoginView } from './components/auth/LoginView.js';
+import { Loader } from './components/ui/primitives.js';
 import { ProtectedRoute } from './components/auth/ProtectedRoute.js';
 
 // Views
@@ -133,12 +133,16 @@ const DashboardLayout: React.FC = () => {
     navigate(getPathFromTab(tab));
   };
 
+  // Student pages are separate routes; staff areas keep one mounted dashboard
+  // across their sub-pages, so their state (and loaded data) survives tab changes.
+  const section = location.pathname.split('/')[1] || '';
+  const viewKey = section === 'student' ? location.pathname : section;
+
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
-      <Header />
-      <div className="flex-1 w-full max-w-[98%] 2xl:max-w-[1750px] mx-auto px-3 sm:px-4 lg:px-6 py-6 flex flex-col md:flex-row gap-5">
-        <Sidebar currentTab={currentTab} onSelectTab={handleSelectTab} />
-        <main className="flex-1 min-w-0">
+    <div className="flex min-h-screen flex-col bg-platform text-ink-900">
+      <Header currentTab={currentTab} onSelectTab={handleSelectTab} />
+      <main id="app-shell-main" className="mx-auto w-full max-w-[1440px] flex-1 px-4 py-7 sm:px-6 lg:px-8 lg:py-9">
+        <div key={viewKey} className="animate-fade-in">
           <Routes>
             {/* Student Protected Routes */}
             <Route
@@ -206,24 +210,21 @@ const DashboardLayout: React.FC = () => {
             />
 
             {/* Catch-all for inside protected area */}
-            <Route path="*" element={<Navigate to="/student/dashboard" replace />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
-        </main>
-      </div>
+        </div>
+      </main>
 
-      {/* University Footer */}
-      <footer className="bg-white border-t border-slate-200 mt-auto py-5 text-center text-xs text-slate-500">
-        <div className="w-full max-w-[98%] 2xl:max-w-[1750px] mx-auto px-3 sm:px-4 lg:px-6 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div>
-            <span className="font-bold text-slate-800">
-              {t('مشروع التخرج: المستشار الأكاديمي الذكي (Smart Academic Advisor)', 'Graduation Project: Smart Academic Advisor')}
+      <footer className="no-print border-t border-ink-200 bg-paper/60">
+        <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-1 px-4 py-4 text-[12px] text-ink-500 sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
+          <p>
+            <span className="font-semibold text-ink-700">
+              {t('مشروع تخرج: المستشار الأكاديمي الذكي', 'Graduation project: Smart Academic Advisor')}
             </span>
-            <span className="mx-2">|</span>
-            <span>{t('برنامج علوم الحاسب بنظام الساعات المعتمدة', 'Credit-Hour Computer Science Degree Program')}</span>
-          </div>
-          <div className="text-[11px] text-slate-400">
-            {t('متوافق مع قواعد وبيانات نظام ابن الهيثم لإدارة شؤون الطلاب والامتحانات', 'Compatible with Ibn Al-Haitham University SIS Engine')}
-          </div>
+            <span className="mx-2 text-ink-300" aria-hidden="true">|</span>
+            {t('برنامج علوم الحاسب بنظام الساعات المعتمدة', 'Computer Science credit-hour programme')}
+          </p>
+          <p>{t('متوافق مع بيانات نظام ابن الهيثم لشؤون الطلاب', 'Works with Ibn Al-Haitham student records')}</p>
         </div>
       </footer>
     </div>
@@ -236,8 +237,8 @@ const RoleBasedRedirect: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center text-slate-100">
-        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-500"></div>
+      <div className="grid min-h-screen place-items-center bg-platform">
+        <Loader />
       </div>
     );
   }

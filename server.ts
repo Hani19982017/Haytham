@@ -64,7 +64,11 @@ async function ensureDatabaseRunning(): Promise<void> {
         console.log('[Database] PostgreSQL port 5432 is now active.');
         try {
           const { execSync } = await import('child_process');
-          execSync('DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable" npx prisma db push --skip-generate', { stdio: 'ignore' });
+          // Pass DATABASE_URL through env (the inline `VAR=value cmd` form only works in bash, not on Windows).
+          execSync('npx prisma db push --skip-generate', {
+            stdio: 'ignore',
+            env: { ...process.env, DATABASE_URL: 'postgresql://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable' },
+          });
           const { seedDatabase } = await import('./prisma/seed.js');
           await seedDatabase();
           console.log('[Database] Schema pushed and database seeded successfully.');

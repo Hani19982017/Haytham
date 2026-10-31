@@ -2,26 +2,47 @@ import React, { useState, useRef } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { useLanguage } from '../../context/LanguageContext.js';
 import { api } from '../../services/api.js';
+import { PageHeader, Panel, PanelHeader, Segmented, Modal, Chip, cn } from '../ui/index.js';
 import {
   UploadCloud,
   FileSpreadsheet,
   CheckCircle2,
   AlertTriangle,
+  AlertCircle,
   RefreshCw,
   FileCheck,
   Trash2,
   Database,
   ShieldAlert,
-  HelpCircle,
-  Users,
-  BookOpen,
-  ArrowRight,
-  Sparkles,
+  ListChecks,
 } from 'lucide-react';
 
 interface DataImportViewProps {
   onDataImported?: () => void;
 }
+
+// Column headers the importer expects on row 5 of the faculty sheet (exact spelling).
+const EXCEL_COLUMNS = [
+  'كود الطالب',
+  'الاسم',
+  'المعدل التراكمى',
+  'الساعات المكتسبه',
+  'المستوي',
+  'كود المقرر',
+  'اسم المقرر',
+  'نوع المقرر',
+  'مستوى المقرر',
+  'الساعات المعتمدة',
+  'عدد مرات النجاح',
+  'عدد مرات الرسوب',
+  'عدد مرات الانسحاب',
+];
+
+const CSV_SAMPLES: Record<'STUDENTS' | 'COURSES' | 'GRADES', string> = {
+  STUDENTS: '2021001, عمر خالد عبد الله, 3.42\n2021002, مريم محمد أحمد, 1.85\n2021003, زياد مصطفى علي, 2.10',
+  COURSES: 'CS 101, مقدمة في البرمجة, 3\nCS 201, تراكيب البيانات, 3\nBS 101, رياضيات 1, 3',
+  GRADES: '2021001, CS 101, A, 2026-09-01\n2021001, BS 101, B+, 2026-09-01\n2021002, CS 101, F, 2026-09-01',
+};
 
 export const DataImportView: React.FC<DataImportViewProps> = ({ onDataImported }) => {
   const { t, language } = useLanguage();
@@ -47,13 +68,19 @@ export const DataImportView: React.FC<DataImportViewProps> = ({ onDataImported }
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const serverError = (err: any, fallbackAr: string, fallbackEn: string) => {
+    const data = err?.response?.data;
+    if (isAr) return data?.messageAr || data?.error || fallbackAr;
+    return data?.messageEn || data?.error || err?.message || fallbackEn;
+  };
+
   // TanStack Query Mutation for Excel Bulk Import
   const uploadExcelMutation = useMutation({
     mutationFn: async (variables: { file: File; wipe: boolean }) => {
       setErrorMessage(null);
       return await api.importStudentsExcel(variables.file, variables.wipe);
     },
-    onSuccess: (data) => {
+    onSuccess: data => {
       setSuccessResult({
         importedStudentsCount: data.importedStudentsCount,
         totalRegistrationsCount: data.totalRegistrationsCount,
@@ -66,8 +93,9 @@ export const DataImportView: React.FC<DataImportViewProps> = ({ onDataImported }
       if (onDataImported) onDataImported();
     },
     onError: (err: any) => {
-      const msg = err.response?.data?.messageAr || err.response?.data?.error || err.message || 'حدث خطأ أثناء رفع ومعالجة الملف';
-      setErrorMessage(msg);
+      setErrorMessage(
+        serverError(err, 'تعذر رفع الملف أو قراءته. تأكد أنه ملف الكلية الرسمي ثم حاول مرة أخرى.', 'The file could not be uploaded or read. Check it is the official faculty sheet and try again.')
+      );
     },
   });
 
@@ -109,12 +137,17 @@ export const DataImportView: React.FC<DataImportViewProps> = ({ onDataImported }
     if (!isValid) {
       setErrorMessage(
         isAr
-          ? 'صيغة الملف غير مدعومة. يرجى اختيار ملف إكسل بصيغة .xlsx'
-          : 'Invalid file format. Please upload an Excel file (.xlsx).'
+          ? 'هذا ليس ملف Excel. اختر ملفاً بامتداد ‎.xlsx أو ‎.xls.'
+          : 'That is not an Excel file. Choose a .xlsx or .xls file.'
       );
       return;
     }
     setSelectedFile(file);
+  };
+
+  const clearSelectedFile = () => {
+    setSelectedFile(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const handleToggleWipe = (nextValue: boolean) => {
@@ -143,9 +176,7 @@ export const DataImportView: React.FC<DataImportViewProps> = ({ onDataImported }
 
   // CSV Fallback Section State
   const [csvType, setCsvType] = useState<'STUDENTS' | 'COURSES' | 'GRADES'>('STUDENTS');
-  const [csvText, setCsvText] = useState(
-    '2021001, عمر خالد عبد الله, 3.42\n2021002, مريم محمد أحمد, 1.85\n2021003, زياد مصطفى علي, 2.10'
-  );
+  const [csvText, setCsvText] = useState(CSV_SAMPLES.STUDENTS);
   const [csvImporting, setCsvImporting] = useState(false);
   const [csvReport, setCsvReport] = useState<any>(null);
 
@@ -153,96 +184,92 @@ export const DataImportView: React.FC<DataImportViewProps> = ({ onDataImported }
     try {
       setCsvImporting(true);
       setCsvReport(null);
+      setErrorMessage(null);
       const res = await api.importCsvData(csvType, csvText);
       setCsvReport(res);
       if (onDataImported) onDataImported();
     } catch (err: any) {
-      setErrorMessage(err.message || 'فشل استيراد CSV');
+      setErrorMessage(serverError(err, 'فشل استيراد نص CSV. راجع الصيغة وحاول مرة أخرى.', 'The CSV import failed. Check the format and try again.'));
     } finally {
       setCsvImporting(false);
     }
   };
 
+  const selectCsvType = (type: 'STUDENTS' | 'COURSES' | 'GRADES') => {
+    setCsvType(type);
+    setCsvText(CSV_SAMPLES[type]);
+  };
+
+  const formatSize = (bytes: number) =>
+    bytes < 1024 * 1024
+      ? t(`${Math.max(1, Math.round(bytes / 1024))} كيلوبايت`, `${Math.max(1, Math.round(bytes / 1024))} KB`)
+      : t(`${(bytes / (1024 * 1024)).toFixed(2)} ميجابايت`, `${(bytes / (1024 * 1024)).toFixed(2)} MB`);
+
+  const csvColumns: Record<typeof csvType, string> = {
+    STUDENTS: t('الرقم الجامعي، الاسم، المعدل التراكمي', 'student code, name, GPA'),
+    COURSES: t('كود المقرر، اسم المقرر، عدد الساعات', 'course code, course name, credit hours'),
+    GRADES: t('الرقم الجامعي، كود المقرر، التقدير، تاريخ الفصل', 'student code, course code, grade, term date'),
+  };
+
+  const isUploading = uploadExcelMutation.isPending;
+
   return (
     <div className="space-y-6">
-      {/* Header and Mode Selector */}
-      <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-xs">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2 mb-1.5">
-              <span className="p-2 bg-indigo-50 text-indigo-700 rounded-xl">
-                <FileSpreadsheet className="w-5 h-5" />
-              </span>
-              <h3 className="text-base font-bold text-slate-900">
-                {t('استيراد البيانات الأكاديمية (Excel / CSV)', 'Academic Data Bulk Importer')}
-              </h3>
-            </div>
-            <p className="text-xs text-slate-500 max-w-2xl leading-relaxed">
-              {t(
-                'استيراد شامل لبيانات الطلاب ومقرراتهم الأكاديمية من ملفات الإكسل (.xlsx) الرسمية مع تخطي ترويسة البيانات التمهيدية (Row 5)، تجميع المقررات لكل طالب، وتحديث السجلات وحساب المحاولات تلقائياً.',
-                'Bulk import students and their course registrations from official Excel sheets (.xlsx). Skips top metadata rows, groups multiple courses per student, creates accounts, and synchronizes academic records.'
-              )}
-            </p>
-          </div>
+      <PageHeader
+        icon={UploadCloud}
+        title={t('استيراد البيانات', 'Data import')}
+        description={t(
+          'ارفع كشف الطلاب ومقرراتهم من ملف Excel الرسمي للكلية، أو الصق بيانات قصيرة بصيغة CSV.',
+          'Upload students and their courses from the faculty’s official Excel sheet, or paste short CSV data.'
+        )}
+        actions={
+          <Segmented
+            ariaLabel={t('طريقة الاستيراد', 'Import method')}
+            value={importMode}
+            onChange={setImportMode}
+            options={[
+              { value: 'EXCEL', label: t('ملف Excel', 'Excel file'), icon: FileSpreadsheet },
+              { value: 'CSV', label: t('نص CSV', 'CSV text'), icon: Database },
+            ]}
+          />
+        }
+      />
 
-          {/* Mode Switcher */}
-          <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl self-start md:self-center border border-slate-200">
-            <button
-              onClick={() => setImportMode('EXCEL')}
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                importMode === 'EXCEL' ? 'bg-white text-indigo-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <FileSpreadsheet className="w-3.5 h-3.5" />
-              <span>{t('استيراد ملف إكسل (.xlsx)', 'Excel File (.xlsx)')}</span>
-            </button>
-            <button
-              onClick={() => setImportMode('CSV')}
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                importMode === 'CSV' ? 'bg-white text-indigo-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <Database className="w-3.5 h-3.5" />
-              <span>{t('استيراد نص CSV سريع', 'Quick CSV')}</span>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Mode 1: Real Excel Bulk Importer */}
+      {/* ===================================================================
+          Excel bulk import
+          =================================================================== */}
       {importMode === 'EXCEL' && (
-        <div className="space-y-5">
-          {/* Main Excel Upload Card */}
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-xs space-y-5">
-            {/* Metadata Detection Info Badge */}
-            <div className="p-3.5 rounded-xl bg-indigo-50/70 border border-indigo-100 flex items-start gap-3 text-xs text-indigo-900">
-              <Sparkles className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
-              <div>
-                <span className="font-bold block mb-0.5">
-                  {t('نظام المعالجة الذكي لملف إكسل الكلية:', 'Smart File Parsing Logic:')}
-                </span>
-                <span className="text-indigo-800 leading-relaxed">
-                  {t(
-                    'تمت برمجة النظام لتخطي أول 4 صفوف (بيانات وصفية) وقراءة الترويسة من السطر 5 مباشرة ("كود الطالب"، "الاسم"، "المعدل التراكمى"، "الساعات المكتسبه"، "المستوي"، "كود المقرر"، "اسم المقرر"، "نوع المقرر"، "مستوى المقرر"، "الساعات المعتمدة"، "عدد مرات النجاح"، "عدد مرات الرسوب"، "عدد مرات الانسحاب"). يتم تجميع صفوف المقررات لكل طالب وتحديث حسابه وسجلاته تلقائياً مع كلمة مرور افتراضية (std123456).',
-                    'Automatically skips the top 4 metadata rows, mapping headers on row 5. Groups duplicated student rows, upserts User (hashed std123456) & Student profile, creates Courses and links registrations with attempt counts.'
-                  )}
-                </span>
-              </div>
-            </div>
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
+          <Panel>
+            <PanelHeader
+              icon={FileSpreadsheet}
+              title={t('رفع ملف Excel', 'Upload an Excel file')}
+              description={t('ملف واحد بامتداد ‎.xlsx أو ‎.xls حتى 50 ميجابايت.', 'One .xlsx or .xls file, up to 50 MB.')}
+            />
 
-            {/* Drag & Drop Area */}
+            {/* Drop zone */}
             <div
+              role="button"
+              tabIndex={0}
+              aria-label={t('اختر ملف Excel أو أفلته هنا', 'Choose an Excel file or drop it here')}
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
               onDrop={handleDrop}
               onClick={() => fileInputRef.current?.click()}
-              className={`border-2 border-dashed rounded-2xl p-8 text-center transition cursor-pointer flex flex-col items-center justify-center gap-3 ${
+              onKeyDown={e => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  fileInputRef.current?.click();
+                }
+              }}
+              className={cn(
+                'flex cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed px-6 py-10 text-center transition',
                 isDragging
-                  ? 'border-indigo-600 bg-indigo-50/50 scale-[1.01]'
+                  ? 'border-sign-500 bg-sign-50'
                   : selectedFile
-                  ? 'border-emerald-500 bg-emerald-50/30'
-                  : 'border-slate-300 hover:border-indigo-400 hover:bg-slate-50/60'
-              }`}
+                  ? 'border-sign-300 bg-sign-50/50'
+                  : 'border-ink-300 bg-ink-50/60 hover:border-sign-400 hover:bg-sign-50/40'
+              )}
             >
               <input
                 ref={fileInputRef}
@@ -253,309 +280,337 @@ export const DataImportView: React.FC<DataImportViewProps> = ({ onDataImported }
               />
 
               {selectedFile ? (
-                <div className="flex flex-col items-center gap-2">
-                  <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center shadow-xs">
-                    <FileCheck className="w-6 h-6" />
-                  </div>
-                  <div className="text-center">
-                    <p className="text-sm font-bold text-slate-900">{selectedFile.name}</p>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      {(selectedFile.size / (1024 * 1024)).toFixed(2)} MB • {t('جاهز للمزامنة والاستيراد', 'Ready to upload & sync')}
+                <>
+                  <span className="grid h-14 w-14 place-items-center rounded-2xl bg-sign-600 text-white shadow-[inset_0_-3px_0_rgb(0_0_0/0.18)]">
+                    <FileCheck className="h-7 w-7" aria-hidden="true" />
+                  </span>
+                  <div>
+                    <p className="break-all text-[15px] font-bold text-ink-950" dir="ltr">
+                      {selectedFile.name}
+                    </p>
+                    <p className="mt-0.5 text-[12.5px] text-ink-500">
+                      {formatSize(selectedFile.size)}
+                      <span className="mx-2 text-ink-300" aria-hidden="true">
+                        |
+                      </span>
+                      {t('جاهز للرفع', 'Ready to upload')}
                     </p>
                   </div>
                   <button
                     type="button"
-                    onClick={(e) => {
+                    onClick={e => {
                       e.stopPropagation();
-                      setSelectedFile(null);
-                      if (fileInputRef.current) fileInputRef.current.value = '';
+                      clearSelectedFile();
                     }}
-                    className="mt-2 px-3 py-1 text-xs text-rose-600 hover:bg-rose-50 rounded-lg flex items-center gap-1 transition"
+                    className="btn btn-ghost btn-sm text-signal-600"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>{t('إلغاء واختيار ملف آخر', 'Remove and pick another')}</span>
+                    <Trash2 aria-hidden="true" />
+                    {t('إزالة الملف واختيار غيره', 'Remove and choose another')}
                   </button>
-                </div>
+                </>
               ) : (
-                <div className="flex flex-col items-center gap-2">
-                  <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center shadow-xs">
-                    <UploadCloud className="w-6 h-6" />
-                  </div>
-                  <div className="text-center">
-                    <p className="text-sm font-bold text-slate-900">
-                      {t('اسحب وأفلت ملف الإكسل (.xlsx) هنا، أو اضغط للاختيار', 'Drag and drop your Excel file (.xlsx) here, or click to browse')}
+                <>
+                  <span
+                    className={cn(
+                      'grid h-14 w-14 place-items-center rounded-2xl transition',
+                      isDragging ? 'bg-sign-600 text-white' : 'bg-paper text-sign-600 ring-1 ring-ink-200'
+                    )}
+                  >
+                    <UploadCloud className="h-7 w-7" aria-hidden="true" />
+                  </span>
+                  <div>
+                    <p className="text-[15px] font-bold text-ink-950">
+                      {isDragging ? t('أفلت الملف هنا', 'Drop the file here') : t('اسحب ملف Excel إلى هنا', 'Drag an Excel file here')}
                     </p>
-                    <p className="text-xs text-slate-500 mt-1">
-                      {t('يدعم ملفات .xlsx و .xls (حتى 50 ميجابايت)', 'Supports .xlsx and .xls files (up to 50MB)')}
+                    <p className="mt-0.5 text-[13px] text-ink-500">
+                      {t('أو اضغط لاختياره من جهازك', 'or click to choose it from your computer')}
                     </p>
                   </div>
-                </div>
+                </>
               )}
             </div>
 
-            {/* Wipe / Replace Option (Critical Requirement) */}
-            <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/80 space-y-2">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex items-start gap-2.5">
-                  <input
-                    id="wipe-checkbox"
-                    type="checkbox"
-                    checked={wipeData}
-                    onChange={(e) => handleToggleWipe(e.target.checked)}
-                    className="mt-1 h-4 w-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500 cursor-pointer"
-                  />
-                  <div>
-                    <label
-                      htmlFor="wipe-checkbox"
-                      className="text-xs font-bold text-slate-900 cursor-pointer block"
-                    >
-                      {t('مسح البيانات القديمة قبل الاستيراد (إحلال كامل)', 'Wipe existing data before import (Full Replace)')}
-                    </label>
-                    <p className="text-[11px] text-slate-500 mt-0.5">
-                      {t(
-                        'عند تفعيل هذا الخيار، سيتم تفريغ تسجيلات الطلاب وسجلاتهم الحالية وإعادة بنائها بالكامل من ملف الإكسل دون المساس بحسابات المشرفين والمديرين.',
-                        'Clears existing student profiles and course registrations before importing. Preserves Admin and Advisor accounts.'
-                      )}
-                    </p>
-                  </div>
-                </div>
-
-                {wipeData && (
-                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 shrink-0">
-                    <AlertTriangle className="w-3 h-3" />
-                    {t('وضع الإحلال مفعل', 'Wipe active')}
+            {/* Replace option */}
+            <div
+              className={cn(
+                'mt-5 rounded-xl border p-4 transition',
+                wipeData ? 'border-signal-200 bg-signal-50' : 'border-ink-200 bg-ink-50'
+              )}
+            >
+              <label htmlFor="wipe-checkbox" className="flex cursor-pointer items-start gap-3">
+                <input
+                  id="wipe-checkbox"
+                  type="checkbox"
+                  checked={wipeData}
+                  onChange={e => handleToggleWipe(e.target.checked)}
+                  className="mt-1 h-4 w-4 shrink-0 accent-[var(--color-signal-500)]"
+                />
+                <span className="min-w-0">
+                  <span className="flex flex-wrap items-center gap-2 text-[13.5px] font-bold text-ink-900">
+                    {t('مسح بيانات الطلاب الحالية قبل الاستيراد', 'Clear current student data before importing')}
+                    {wipeData && (
+                      <Chip tone="signal" icon={AlertTriangle}>
+                        {t('المسح الكامل مفعّل', 'Full replace is on')}
+                      </Chip>
+                    )}
                   </span>
-                )}
-              </div>
+                  <span className="mt-0.5 block text-[12.5px] leading-6 text-ink-600">
+                    {t(
+                      'يحذف ملفات الطلاب وتسجيلاتهم الحالية ثم يبنيها من الملف من جديد. حسابات المديرين والمرشدين لا تتأثر.',
+                      'Deletes current student profiles and registrations, then rebuilds them from the file. Admin and advisor accounts are not affected.'
+                    )}
+                  </span>
+                </span>
+              </label>
             </div>
 
-            {/* Action Button: Upload and Sync */}
-            <div className="flex items-center gap-3 pt-2">
+            {/* Action */}
+            <div className="mt-5 flex flex-wrap items-center gap-3">
               <button
                 type="button"
-                disabled={!selectedFile || uploadExcelMutation.isPending}
+                disabled={!selectedFile || isUploading}
                 onClick={handleUploadAndSync}
-                className={`px-6 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer shadow-xs ${
-                  !selectedFile || uploadExcelMutation.isPending
-                    ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
-                    : 'bg-indigo-600 hover:bg-indigo-700 text-white'
-                }`}
+                className={cn('btn btn-lg', wipeData ? 'btn-danger' : 'btn-primary')}
               >
-                {uploadExcelMutation.isPending ? (
+                {isUploading ? (
                   <>
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                    <span>{t('جارٍ التحليل والرفع والمزامنة في قاعدة البيانات...', 'Uploading, Parsing & Syncing with Database...')}</span>
+                    <RefreshCw aria-hidden="true" className="animate-spin" />
+                    {t('جارٍ الرفع والمعالجة…', 'Uploading and processing…')}
                   </>
                 ) : (
                   <>
-                    <UploadCloud className="w-4 h-4" />
-                    <span>{t('رفع ومزامنة البيانات (Upload and Sync)', 'Upload and Sync')}</span>
+                    <UploadCloud aria-hidden="true" />
+                    {wipeData ? t('مسح ثم استيراد الملف', 'Clear, then import the file') : t('رفع واستيراد الملف', 'Upload and import the file')}
                   </>
                 )}
               </button>
-
-              {selectedFile && !uploadExcelMutation.isPending && (
-                <span className="text-xs text-slate-500">
-                  {t('سيتم تطبيق العملية داخل معاملة Prisma موثوقة', 'Execution wrapped in an atomic Prisma transaction')}
+              {!selectedFile && !isUploading && (
+                <span className="text-[12.5px] text-ink-500">{t('اختر ملفاً أولاً لتفعيل الزر.', 'Choose a file first to enable the button.')}</span>
+              )}
+              {selectedFile && !isUploading && (
+                <span className="text-[12.5px] text-ink-500">
+                  {t('يُنفذ الاستيراد كاملاً أو لا يُنفذ إطلاقاً، فلا تبقى بيانات ناقصة.', 'The import runs all-or-nothing, so no half-imported data is left behind.')}
                 </span>
               )}
             </div>
 
-            {/* Error Message Box */}
             {errorMessage && (
-              <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-start gap-2.5">
-                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <div className="callout callout-signal mt-5" role="alert">
+                <AlertCircle aria-hidden="true" />
                 <div>
-                  <span className="font-bold block mb-0.5">{t('فشل الاستيراد:', 'Import Failed:')}</span>
-                  <span>{errorMessage}</span>
+                  <p className="font-bold">{t('لم يكتمل الاستيراد', 'The import did not finish')}</p>
+                  <p>{errorMessage}</p>
                 </div>
               </div>
             )}
 
-            {/* Success Toast / Banner */}
             {successResult && (
-              <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 font-bold text-sm text-emerald-800">
-                    <CheckCircle2 className="w-5 h-5 text-emerald-600" />
-                    <span>{isAr ? successResult.messageAr : successResult.messageEn}</span>
-                  </div>
-                  <span className="text-[11px] font-bold px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded-lg">
-                    {t('تمت المزامنة بنجاح', 'Synced Successfully')}
-                  </span>
+              <div className="mt-5 overflow-hidden rounded-xl border border-sign-200 bg-sign-50" role="status">
+                <div className="flex items-start gap-3 px-4 py-3">
+                  <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-sign-600" aria-hidden="true" />
+                  <p className="text-[13.5px] font-bold leading-6 text-sign-800">{isAr ? successResult.messageAr : successResult.messageEn}</p>
                 </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
-                  <div className="bg-white/80 p-3 rounded-lg border border-emerald-100 text-center">
-                    <span className="text-slate-500 text-[11px] block">{t('الطلاب المستوردين', 'Imported Students')}</span>
-                    <span className="text-lg font-bold text-emerald-700">{successResult.importedStudentsCount}</span>
+                <dl className="grid grid-cols-1 border-t border-sign-200 bg-paper sm:grid-cols-3">
+                  <div className="kv px-4 py-3">
+                    <dt>{t('طلاب مستوردون', 'Students imported')}</dt>
+                    <dd className="t-num !text-[22px] !font-extrabold text-sign-700">{successResult.importedStudentsCount}</dd>
                   </div>
-                  <div className="bg-white/80 p-3 rounded-lg border border-emerald-100 text-center">
-                    <span className="text-slate-500 text-[11px] block">{t('السجلات والمقررات المرتبطة', 'Linked Registrations')}</span>
-                    <span className="text-lg font-bold text-emerald-700">{successResult.totalRegistrationsCount}</span>
+                  <div className="kv border-t border-sign-100 px-4 py-3 sm:border-s sm:border-t-0">
+                    <dt>{t('تسجيلات مقررات مرتبطة', 'Course registrations linked')}</dt>
+                    <dd className="t-num !text-[22px] !font-extrabold text-sign-700">{successResult.totalRegistrationsCount}</dd>
                   </div>
-                  <div className="bg-white/80 p-3 rounded-lg border border-emerald-100 text-center">
-                    <span className="text-slate-500 text-[11px] block">{t('حالة الإحلال', 'Wipe Mode')}</span>
-                    <span className="text-sm font-bold text-slate-800">
-                      {successResult.wipedData ? t('تم مسح البيانات القديمة أولاً', 'Previous data wiped') : t('تحديث وإضافة تراكمية', 'Upsert / Incremental')}
-                    </span>
+                  <div className="kv border-t border-sign-100 px-4 py-3 sm:border-s sm:border-t-0">
+                    <dt>{t('طريقة الاستيراد', 'Import method')}</dt>
+                    <dd>{successResult.wipedData ? t('مسح كامل ثم بناء من جديد', 'Full replace') : t('إضافة وتحديث فقط', 'Add and update only')}</dd>
                   </div>
-                </div>
+                </dl>
               </div>
             )}
-          </div>
+          </Panel>
+
+          {/* Expected layout */}
+          <Panel as="aside">
+            <PanelHeader
+              icon={ListChecks}
+              tone="lane"
+              title={t('شكل الملف المطلوب', 'Expected file layout')}
+              description={t('هكذا يقرأ النظام ملف الكلية خطوة بخطوة.', 'How the system reads the faculty sheet, step by step.')}
+            />
+            <ol className="space-y-3">
+              {[
+                t('يتجاهل أول 4 صفوف لأنها بيانات وصفية عن الكشف.', 'Skips the first 4 rows; they describe the sheet.'),
+                t('يقرأ أسماء الأعمدة من الصف الخامس.', 'Reads the column names from row 5.'),
+                t('يجمع صفوف كل طالب معاً، ويحدّث ملفه ومقرراته وعدد محاولاته.', 'Groups each student’s rows, then updates their profile, courses and attempts.'),
+                t('ينشئ حساباً لكل طالب جديد بكلمة المرور std123456.', 'Creates an account for each new student with the password std123456.'),
+              ].map((step, i) => (
+                <li key={i} className="flex items-start gap-3">
+                  <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-lane-500 text-[12px] font-bold text-white">{i + 1}</span>
+                  <span className="text-[13px] leading-6 text-ink-700">{step}</span>
+                </li>
+              ))}
+            </ol>
+
+            <div className="mt-5 border-t border-ink-100 pt-4">
+              <p className="mb-2 text-[12.5px] font-semibold text-ink-700">
+                {t('أسماء الأعمدة في الصف الخامس:', 'Column names expected in row 5:')}
+              </p>
+              <ul className="flex flex-wrap gap-1.5" dir="rtl" lang="ar">
+                {EXCEL_COLUMNS.map(col => (
+                  <li key={col} className="chip chip-ink">
+                    {col}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-[12px] leading-5 text-ink-500">
+                {t(
+                  'يجب أن تطابق أسماء الأعمدة هذا الإملاء حرفياً، بما فيها الحروف الأخيرة مثل «ى» و«ه».',
+                  'The headers are in Arabic in the faculty sheet and must match this spelling exactly.'
+                )}
+              </p>
+            </div>
+          </Panel>
         </div>
       )}
 
-      {/* Mode 2: Quick CSV Text Importer */}
+      {/* ===================================================================
+          Quick CSV text import
+          =================================================================== */}
       {importMode === 'CSV' && (
-        <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-xs space-y-4">
-          <div>
-            <h3 className="text-sm font-bold text-slate-900 mb-1">
-              {t('استيراد يدوي سريع عبر CSV', 'Quick Manual CSV Data Importer')}
-            </h3>
-            <p className="text-xs text-slate-500">
-              {t('التحقق المسبق من صحة السجلات قبل إدخالها لمنع أي أخطاء في قاعدة البيانات الأكاديمية.', 'Validates records before writing to PostgreSQL.')}
-            </p>
+        <Panel>
+          <PanelHeader
+            icon={Database}
+            title={t('استيراد نص CSV', 'Import CSV text')}
+            description={t(
+              'لإضافة سجلات قليلة بسرعة. يُفحص كل سطر قبل حفظه، والأسطر الخاطئة تُرفض مع سبب الرفض.',
+              'For adding a few records quickly. Every row is checked before it is saved; invalid rows are rejected with a reason.'
+            )}
+            actions={
+              <Segmented
+                ariaLabel={t('نوع البيانات', 'Data type')}
+                value={csvType}
+                onChange={selectCsvType}
+                options={[
+                  { value: 'STUDENTS', label: t('الطلاب', 'Students') },
+                  { value: 'COURSES', label: t('المقررات', 'Courses') },
+                  { value: 'GRADES', label: t('الدرجات', 'Grades') },
+                ]}
+              />
+            }
+          />
+
+          <label htmlFor="csv-text" className="field-label">
+            {t('البيانات، سطر لكل سجل', 'Data, one record per line')}
+          </label>
+          <textarea
+            id="csv-text"
+            rows={8}
+            dir="ltr"
+            value={csvText}
+            onChange={e => setCsvText(e.target.value)}
+            className="field t-num leading-7"
+            spellCheck={false}
+          />
+          <p className="field-hint">
+            {t('ترتيب الأعمدة:', 'Column order:')} <span className="font-semibold text-ink-700">{csvColumns[csvType]}</span>
+            {'. '}
+            {t('تغيير النوع يملأ الحقل بمثال جاهز.', 'Switching the type fills the box with an example.')}
+          </p>
+
+          <div className="mt-5 flex flex-wrap items-center gap-3">
+            <button type="button" disabled={csvImporting || !csvText.trim()} onClick={handleRunCsvImport} className="btn btn-primary btn-lg">
+              {csvImporting ? (
+                <>
+                  <RefreshCw aria-hidden="true" className="animate-spin" />
+                  {t('جارٍ الفحص والاستيراد…', 'Checking and importing…')}
+                </>
+              ) : (
+                <>
+                  <UploadCloud aria-hidden="true" />
+                  {t('فحص الأسطر واستيرادها', 'Check and import rows')}
+                </>
+              )}
+            </button>
           </div>
 
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => {
-                setCsvType('STUDENTS');
-                setCsvText('2021001, عمر خالد عبد الله, 3.42\n2021002, مريم محمد أحمد, 1.85\n2021003, زياد مصطفى علي, 2.10');
-              }}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
-                csvType === 'STUDENTS' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700'
-              }`}
-            >
-              {t('بيانات الطلاب (Students)', 'Students')}
-            </button>
-            <button
-              onClick={() => {
-                setCsvType('COURSES');
-                setCsvText('CS 101, مقدمة في البرمجة, 3\nCS 201, تراكيب البيانات, 3\nBS 101, رياضيات 1, 3');
-              }}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
-                csvType === 'COURSES' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700'
-              }`}
-            >
-              {t('دليل المقررات (Courses)', 'Courses')}
-            </button>
-            <button
-              onClick={() => {
-                setCsvType('GRADES');
-                setCsvText('2021001, CS 101, A, 2026-09-01\n2021001, BS 101, B+, 2026-09-01\n2021002, CS 101, F, 2026-09-01');
-              }}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
-                csvType === 'GRADES' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700'
-              }`}
-            >
-              {t('رصد الدرجات (Grades)', 'Grades')}
-            </button>
-          </div>
-
-          <div>
-            <label className="text-xs font-bold text-slate-700 block mb-1">
-              {t('محتوى نص CSV:', 'CSV Data Content:')}
-            </label>
-            <textarea
-              rows={6}
-              value={csvText}
-              onChange={(e) => setCsvText(e.target.value)}
-              className="w-full font-mono text-xs p-3 rounded-xl border border-slate-200 bg-slate-50 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
-            />
-          </div>
-
-          <button
-            disabled={csvImporting}
-            onClick={handleRunCsvImport}
-            className="px-6 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition flex items-center gap-2 cursor-pointer shadow-xs"
-          >
-            <UploadCloud className="w-4 h-4" />
-            <span>{csvImporting ? t('جارٍ الاستيراد والتدقيق...', 'Importing & Validating...') : t('بدء فحص واستيراد البيانات', 'Run Validation & Import')}</span>
-          </button>
+          {errorMessage && (
+            <div className="callout callout-signal mt-5" role="alert">
+              <AlertCircle aria-hidden="true" />
+              <div>
+                <p className="font-bold">{t('لم يكتمل الاستيراد', 'The import did not finish')}</p>
+                <p>{errorMessage}</p>
+              </div>
+            </div>
+          )}
 
           {csvReport && (
-            <div className="mt-4 p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-3 text-xs">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-slate-900">{t('تقرير نتيجة الاستيراد:', 'Validation Report:')}</span>
-                <div className="flex items-center gap-3">
-                  <span className="text-emerald-700 font-bold bg-emerald-100 px-2 py-0.5 rounded">
-                    {t('نجح: ', 'Success: ')} {csvReport.successfulRows}
-                  </span>
-                  <span className="text-rose-700 font-bold bg-rose-100 px-2 py-0.5 rounded">
-                    {t('فشل: ', 'Failed: ')} {csvReport.failedRows}
-                  </span>
+            <div className="mt-5 rounded-xl border border-ink-200" role="status">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-ink-100 px-4 py-3">
+                <span className="text-[14px] font-bold text-ink-900">{t('نتيجة الاستيراد', 'Import result')}</span>
+                <div className="flex flex-wrap gap-2">
+                  <Chip tone="sign" icon={CheckCircle2}>
+                    {t(`${csvReport.successfulRows ?? 0} سطر حُفظ`, `${csvReport.successfulRows ?? 0} rows saved`)}
+                  </Chip>
+                  <Chip tone={(csvReport.failedRows ?? 0) > 0 ? 'signal' : 'ink'} icon={AlertTriangle}>
+                    {t(`${csvReport.failedRows ?? 0} سطر رُفض`, `${csvReport.failedRows ?? 0} rows rejected`)}
+                  </Chip>
                 </div>
               </div>
-
-              {csvReport.validationErrors?.length > 0 ? (
-                <div className="space-y-1">
-                  <span className="text-rose-700 font-bold block">{t('أخطاء التدقيق:', 'Validation Errors:')}</span>
-                  <ul className="list-disc list-inside space-y-0.5 text-rose-800 text-[11px]">
+              <div className="px-4 py-3">
+                {csvReport.validationErrors?.length > 0 ? (
+                  <ul className="space-y-1.5">
                     {csvReport.validationErrors.map((err: any, i: number) => (
-                      <li key={i}>
-                        {t('سطر', 'Row')} {err.row}: {err.reason}
+                      <li key={i} className="flex items-start gap-2 text-[13px] leading-6 text-signal-700">
+                        <span className="t-num shrink-0 rounded-md bg-signal-50 px-1.5 text-[12px] font-bold ring-1 ring-signal-200">
+                          {t(`سطر ${err.row}`, `Row ${err.row}`)}
+                        </span>
+                        <span>{err.reason}</span>
                       </li>
                     ))}
                   </ul>
-                </div>
-              ) : (
-                <div className="text-emerald-700 font-bold flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4" />
-                  <span>{t('تم استيراد كافة الصفوف بنجاح ودون أية أخطاء بنية وحفظها في قاعدة البيانات.', 'All rows successfully imported without errors.')}</span>
-                </div>
-              )}
+                ) : (
+                  <p className="flex items-center gap-2 text-[13px] font-semibold text-sign-700">
+                    <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+                    {t('حُفظت كل الأسطر بلا أخطاء.', 'Every row was saved without errors.')}
+                  </p>
+                )}
+              </div>
             </div>
           )}
-        </div>
+        </Panel>
       )}
 
-      {/* Confirmation Warning Dialog for Wipe Data */}
+      {/* Confirm full replace */}
       {showWipeWarningDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-rose-200 space-y-4 animate-in fade-in zoom-in-95 duration-150">
-            <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
-              <ShieldAlert className="w-6 h-6" />
-            </div>
-
-            <div className="text-center space-y-2">
-              <h3 className="text-base font-bold text-slate-900">
-                {t('تحذير: تأكيد مسح البيانات القديمة', 'Warning: Confirm Data Wipe')}
-              </h3>
-              <p className="text-xs text-rose-700 font-medium leading-relaxed">
-                {t(
-                  'تحذير: سيتم مسح كافة المقررات وتسجيلات الطلاب الحالية. هل أنت متأكد؟',
-                  'Warning: All existing courses and student registrations will be wiped. Are you sure?'
-                )}
-              </p>
-              <p className="text-[11px] text-slate-500">
-                {t(
-                  'ملاحظة أمان: حسابات المديرين والمشرفين الأكاديميين ستبقى محفوظة ولن يتم حذفها.',
-                  'Safety Note: Admin and Advisor accounts are preserved and will not be affected.'
-                )}
-              </p>
-            </div>
-
-            <div className="flex items-center gap-3 pt-2">
-              <button
-                type="button"
-                onClick={confirmWipe}
-                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition cursor-pointer shadow-xs"
-              >
-                {t('نعم، متأكد وموافق على المسح الكامل', 'Yes, confirm full replace')}
+        <Modal
+          onClose={cancelWipe}
+          size="sm"
+          icon={ShieldAlert}
+          tone="signal"
+          title={t('مسح بيانات الطلاب قبل الاستيراد؟', 'Clear student data before importing?')}
+          closeLabel={t('إغلاق', 'Close')}
+          footer={
+            <>
+              <button type="button" onClick={cancelWipe} className="btn btn-secondary">
+                {t('إلغاء', 'Cancel')}
               </button>
-              <button
-                type="button"
-                onClick={cancelWipe}
-                className="flex-1 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition cursor-pointer"
-              >
-                {t('إلغاء الخيار', 'Cancel')}
+              <button type="button" onClick={confirmWipe} className="btn btn-danger">
+                {t('نعم، فعّل المسح الكامل', 'Yes, turn on full replace')}
               </button>
-            </div>
+            </>
+          }
+        >
+          <div className="space-y-3 text-[13.5px] leading-7">
+            <p className="font-semibold text-signal-700">
+              {t(
+                'عند الاستيراد ستُحذف كل المقررات وتسجيلات الطلاب الحالية ثم تُبنى من الملف.',
+                'When you import, all current courses and student registrations will be deleted and rebuilt from the file.'
+              )}
+            </p>
+            <p className="text-ink-600">
+              {t('حسابات المديرين والمرشدين الأكاديميين تبقى كما هي.', 'Admin and academic advisor accounts stay as they are.')}
+            </p>
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

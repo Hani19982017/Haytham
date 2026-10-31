@@ -3,37 +3,57 @@ import { useAuth } from '../../context/AuthContext.js';
 import { useLanguage } from '../../context/LanguageContext.js';
 import { api } from '../../services/api.js';
 import { Student, StudentCourseRecord } from '../../types/index.js';
+import { TranscriptReportModal } from '../reports/TranscriptReportModal.js';
 import {
-  Award,
+  Panel,
+  PanelHeader,
+  Chip,
+  CodeBadge,
+  Meter,
+  Loader,
+  EmptyState,
+  Segmented,
+  JourneyRoute,
+  GpaScale,
+  cn,
+  riskTone,
+  riskLabel,
+  trackLabel,
+  trackTone,
+  trainingLabel,
+  recordTone,
+  recordLabel,
+  gradeTone,
+  chipClass,
+  creditCapForGpa,
+  pick,
+  personName,
+  type Tone,
+} from '../ui/index.js';
+import {
   AlertTriangle,
-  BookOpen,
-  CheckCircle,
-  GraduationCap,
-  Sparkles,
-  TrendingDown,
-  TrendingUp,
-  Clock,
   ShieldAlert,
-  ArrowRight,
-  Calculator,
   FileText,
-  FileCheck2,
-  Briefcase,
-  QrCode,
-  Download,
   Printer,
-  X,
-  User,
-  School,
-  Calendar,
-  Layers,
+  Signpost,
+  TrendingUp,
+  Route,
+  CalendarCheck,
+  Briefcase,
+  GitFork,
+  BookOpen,
+  NotebookPen,
+  ChevronLeft,
   ChevronRight,
-  Info,
+  RotateCcw,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 
 interface StudentDashboardProps {
   onNavigateTab: (tab: string) => void;
 }
+
+const DEGREE_CREDITS = 134;
 
 export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigateTab }) => {
   const { currentUser } = useAuth();
@@ -42,8 +62,6 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigateTa
   const [loading, setLoading] = useState(true);
   const [recordFilter, setRecordFilter] = useState<'ALL' | 'IN_PROGRESS' | 'PASSED' | 'FAILED'>('ALL');
   const [showTranscriptModal, setShowTranscriptModal] = useState(false);
-  const [transcriptData, setTranscriptData] = useState<any>(null);
-  const [transcriptLoading, setTranscriptLoading] = useState(false);
 
   const loadData = async () => {
     const studentId = currentUser?.studentId || currentUser?.id || 'stu_omar';
@@ -72,74 +90,43 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigateTa
     loadData();
   }, [currentUser]);
 
-  const handleOpenTranscript = async () => {
-    if (!student) return;
-    setShowTranscriptModal(true);
-    try {
-      setTranscriptLoading(true);
-      const report = await api.getOfficialTranscript(student.id);
-      setTranscriptData(report);
-    } catch (e) {
-      console.error('Failed to load official transcript:', e);
-    } finally {
-      setTranscriptLoading(false);
-    }
-  };
-
   if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center p-16 gap-3">
-        <div className="w-10 h-10 border-3 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
-        <span className="text-xs text-slate-500 font-medium">
-          {t('جارٍ تحميل السجل الأكاديمي والبيانات الشاملة للطالب...', 'Loading complete student academic record...')}
-        </span>
-      </div>
-    );
+    return <Loader label={t('جارٍ تحميل سجلك الأكاديمي…', 'Loading your academic record…')} />;
   }
 
   if (!student) {
     return (
-      <div className="p-12 text-center bg-white rounded-2xl border border-slate-200 shadow-xs space-y-4">
-        <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto">
-          <AlertTriangle className="w-6 h-6" />
-        </div>
-        <div>
-          <h3 className="text-base font-bold text-slate-900">{t('تعذر تحميل بيانات الطالب', 'Could not load student profile')}</h3>
-          <p className="text-xs text-slate-500 mt-1">
-            {t('يرجى التحقق من الاتصال بالخادم وقاعدة البيانات ثم المحاولة مجدداً.', 'Please check connection and retry.')}
-          </p>
-        </div>
-        <button
-          onClick={loadData}
-          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition cursor-pointer"
-        >
-          {t('إعادة المحاولة', 'Retry')}
-        </button>
-      </div>
+      <Panel>
+        <EmptyState
+          icon={AlertTriangle}
+          tone="caution"
+          title={t('تعذّر تحميل بيانات الطالب', 'Your student record could not be loaded')}
+          description={t(
+            'الخادم لم يرد. تأكد أن الخادم وقاعدة البيانات يعملان ثم أعد المحاولة.',
+            'The server did not respond. Check that the server and database are running, then try again.'
+          )}
+          action={
+            <button type="button" onClick={loadData} className="btn btn-primary">
+              <RotateCcw aria-hidden="true" />
+              {t('إعادة المحاولة', 'Try again')}
+            </button>
+          }
+        />
+      </Panel>
     );
   }
 
-  const completionPct = Math.min(100, Math.round((student.completedCredits / 134) * 100));
   const isAtRisk = student.cumulativeGpa < 2.0;
-
-  const riskBadgeStyle: Record<string, string> = {
-    LOW: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-    MEDIUM: 'bg-amber-50 text-amber-700 border-amber-200',
-    HIGH: 'bg-orange-50 text-orange-700 border-orange-200',
-    CRITICAL: 'bg-rose-50 text-rose-700 border-rose-200 animate-pulse',
-  };
-
-  const riskLabelMap: Record<string, { ar: string; en: string }> = {
-    LOW: { ar: 'مستقر وآمن (منخفض)', en: 'Low Risk (Healthy)' },
-    MEDIUM: { ar: 'متوسط (تنبيه)', en: 'Medium Risk' },
-    HIGH: { ar: 'مرتفع (إنذار أكاديمي)', en: 'High Risk (Warning)' },
-    CRITICAL: { ar: 'حرج للغاية (خطر فصل)', en: 'Critical (Dismissal Risk)' },
-  };
-
+  const name = personName(language === 'ar' ? student.nameAr : student.nameEn, language);
+  const firstName = name.split(/\s+/)[0];
   const allRecords: StudentCourseRecord[] = student.records || [];
   const currentRecords = allRecords.filter(r => r.status === 'IN_PROGRESS' || r.status === 'ENROLLED');
   const passedRecords = allRecords.filter(r => r.status === 'PASSED');
   const failedRecords = allRecords.filter(r => r.status === 'FAILED');
+  const enrolledCredits = currentRecords.reduce((sum, r) => sum + (r.credits || 0), 0);
+  const gpaDelta = student.cumulativeGpa - student.previousGpa;
+  const creditCap = creditCapForGpa(student.cumulativeGpa);
+  const trainingHours = student.trainingHours || 0;
 
   const displayedRecords = allRecords.filter(r => {
     if (recordFilter === 'IN_PROGRESS') return r.status === 'IN_PROGRESS' || r.status === 'ENROLLED';
@@ -148,575 +135,412 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigateTa
     return true;
   });
 
+  const Chevron = language === 'ar' ? ChevronLeft : ChevronRight;
+
+  // Personalised next steps, ordered by what matters most for this student.
+  type Step = { tab: string; icon: LucideIcon; title: string; why: string; tone: Tone };
+  const nextSteps: Step[] = [];
+  if (isAtRisk) {
+    nextSteps.push({
+      tab: 'student-gpa-plan',
+      icon: TrendingUp,
+      tone: 'signal',
+      title: t('اختر خطة لتحسين معدلك', 'Pick a GPA recovery plan'),
+      why: t('معدلك تحت 2.00؛ الخطة تحدد المقررات التي تعيدها والتقدير المطلوب.', 'Your GPA is under 2.00; a plan sets which courses to retake and the grade you need.'),
+    });
+  }
+  nextSteps.push(
+    {
+      tab: 'student-recommendations',
+      icon: Signpost,
+      tone: 'sign',
+      title: t('راجع المقررات المقترحة لك', 'Review your suggested courses'),
+      why: t('كل اقتراح معه سببه وعدد المقررات التي يفتحها.', 'Each suggestion comes with its reason and what it unlocks.'),
+    },
+    {
+      tab: 'student-registration',
+      icon: CalendarCheck,
+      tone: 'lane',
+      title: t('ابنِ جدول الفصل القادم', 'Build next term’s timetable'),
+      why: t(`حدك الأقصى ${creditCap} ساعة حسب معدلك الحالي.`, `Your ceiling is ${creditCap} credit hours at your current GPA.`),
+    },
+    {
+      tab: 'student-study-plan',
+      icon: Route,
+      tone: 'ink',
+      title: t('شاهد خطتك حتى التخرج', 'See your plan to graduation'),
+      why: t(`${student.remainingCredits} ساعة متبقية موزعة على الفصول القادمة.`, `${student.remainingCredits} credit hours left, spread over the coming terms.`),
+    }
+  );
+  if (!isAtRisk) {
+    nextSteps.push({
+      tab: 'student-what-if',
+      icon: GitFork,
+      tone: 'plum',
+      title: t('جرّب سيناريو «ماذا لو؟»', 'Try a what-if scenario'),
+      why: t('شاهد أثر تقديرات افتراضية على معدلك قبل أن تقرر.', 'See how hypothetical grades would move your GPA.'),
+    });
+  }
+  if (student.completedCredits >= 30 && trainingHours < 240) {
+    nextSteps.push({
+      tab: 'student-training',
+      icon: Briefcase,
+      tone: 'caution',
+      title: t('سجّل ساعات التدريب الصيفي', 'Log your summer training'),
+      why: t(`${trainingHours} من 240 ساعة مسجلة حتى الآن.`, `${trainingHours} of 240 hours logged so far.`),
+    });
+  }
+
+  const consecutive = Math.min(4, student.consecutiveWarnings || 0);
+
   return (
     <div className="space-y-6">
-      {/* Welcome Banner */}
-      <div className="bg-gradient-to-r from-indigo-900 via-slate-900 to-indigo-950 rounded-2xl p-6 text-white shadow-md relative overflow-hidden">
-        <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-5">
-          <div className="space-y-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-white/20 text-white backdrop-blur-xs">
-                {t(`المستوى الأكاديمي: ${student.level}`, `Academic Level ${student.level}`)}
+      {/* ── Hero: where the student stands on the degree route ─────────────── */}
+      <Panel padded={false} className="overflow-hidden">
+        <div className="flex flex-col gap-5 px-5 pb-2 pt-6 sm:px-7 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <h1 className="t-display display-tight text-[26px] sm:text-[30px]">
+              {t(`أهلاً ${firstName}`, `Hello, ${firstName}`)}
+            </h1>
+            <div className="mt-2.5 flex flex-wrap items-center gap-2">
+              <Chip tone="ink">{t(`المستوى ${student.level}`, `Level ${student.level}`)}</Chip>
+              <Chip tone={trackTone[student.track] || 'ink'}>{pick(language, trackLabel[student.track], student.track)}</Chip>
+              <span className="chip chip-ink" dir="ltr">
+                #{student.studentCode}
               </span>
-              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-indigo-500/30 text-indigo-200 border border-indigo-400/20">
-                {student.track}
-              </span>
-              <span className="text-xs text-slate-300 font-mono bg-black/30 px-2 py-0.5 rounded-md">
-                {t('الرقم الجامعي:', 'Student ID:')} #{student.studentCode}
-              </span>
-              <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
-                isAtRisk ? 'bg-rose-500/30 text-rose-200 border border-rose-400/30' : 'bg-emerald-500/30 text-emerald-200 border border-emerald-400/30'
-              }`}>
-                {isAtRisk ? t('تحت الإنذار الأكاديمي', 'Academic Warning') : t('سليم ومستقر', 'Regular Status')}
-              </span>
+              <Chip tone={isAtRisk ? 'signal' : 'sign'}>{isAtRisk ? t('تحت الإنذار الأكاديمي', 'On academic warning') : t('وضع أكاديمي سليم', 'Good standing')}</Chip>
             </div>
-
-            <h2 className="text-2xl font-bold tracking-tight">
-              {t('مرحباً بك،', 'Welcome,')} {language === 'ar' ? student.nameAr : student.nameEn}
-            </h2>
-
-            <div className="flex flex-wrap items-center gap-4 text-xs text-slate-300">
-              <div className="flex items-center gap-1.5">
-                <User className="w-3.5 h-3.5 text-indigo-300" />
-                <span>{t('المرشد الأكاديمي:', 'Advisor:')} <strong className="text-white">{student.advisorName}</strong></span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <School className="w-3.5 h-3.5 text-indigo-300" />
-                <span>{t('البرنامج:', 'Program:')} <strong>{t('علوم الحاسب (134 ساعة معتمدة)', 'Computer Science (134 Cr.)')}</strong></span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <Briefcase className="w-3.5 h-3.5 text-indigo-300" />
-                <span>{t('التدريب الصيفي:', 'Summer Training:')} <strong>{student.trainingHours} / 240 {t('ساعة', 'hrs')} ({student.trainingStatus})</strong></span>
-              </div>
-            </div>
+            <p className="mt-3 text-[13px] text-ink-500">
+              {t('المرشد الأكاديمي:', 'Academic advisor:')} <span className="font-semibold text-ink-800">{personName(student.advisorName, language)}</span>
+            </p>
           </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={() => onNavigateTab('student-recommendations')}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition shadow-sm cursor-pointer"
-            >
-              <Sparkles className="w-4 h-4 text-amber-300" />
-              <span>{t('المقررات الموصى بها ذكياً', 'AI Recommendations')}</span>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => onNavigateTab('student-recommendations')} className="btn btn-primary">
+              <Signpost aria-hidden="true" />
+              {t('المقررات المقترحة', 'Suggested courses')}
             </button>
-            <button
-              onClick={handleOpenTranscript}
-              className="flex items-center gap-2 px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold transition backdrop-blur-xs cursor-pointer border border-white/15"
-            >
-              <FileText className="w-4 h-4 text-indigo-300" />
-              <span>{t('كشف الدرجات الرسمي', 'Official Transcript')}</span>
+            <button type="button" onClick={() => setShowTranscriptModal(true)} className="btn btn-secondary">
+              <FileText aria-hidden="true" />
+              {t('السجل الموثق', 'Verified transcript')}
             </button>
           </div>
         </div>
-      </div>
 
-      {/* Warning Alert Banner (If Applicable) */}
-      {isAtRisk && (
-        <div className="bg-rose-50 border-r-4 border-rose-500 rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-xs">
-          <div className="flex items-start gap-3">
-            <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
-            <div>
-              <h4 className="text-sm font-bold text-rose-900 mb-1">
-                {t(
-                  `تنبيه أكاديمي عاجل: أنت مسجل تحت الإنذار الأكاديمي رقم (${student.warningCount})`,
-                  `Urgent Academic Warning: You have ${student.warningCount} Academic Warning(s)`
-                )}
-              </h4>
-              <p className="text-xs text-rose-700 leading-relaxed">
-                {t(
-                  `معدلك التراكمي (${student.cumulativeGpa.toFixed(2)}) أقل من الحد الأدنى للائحة (2.00). قام المحرك الذكي بتوليد خطة إنقاذ تلقائية لرفع معدلك دون تأخير التخرج وسقف تقديرات الإعادة.`,
-                  `Your cumulative GPA (${student.cumulativeGpa.toFixed(2)}) is below 2.00. An AI GPA recovery plan is available to raise your GPA with retake grade caps.`
-                )}
-              </p>
+        <div className="px-5 pb-4 pt-4 sm:px-7">
+          <JourneyRoute
+            completed={student.completedCredits}
+            enrolled={enrolledCredits}
+            total={DEGREE_CREDITS}
+            milestones={[
+              { at: 30, label: t('التدريب الميداني', 'Field training'), sub: t('30 ساعة', '30 cr') },
+              { at: 94, label: t('مشروع التخرج', 'Graduation project'), sub: t('94 ساعة', '94 cr') },
+              { at: DEGREE_CREDITS, label: t('التخرج', 'Graduation'), sub: t('134 ساعة', '134 cr') },
+            ]}
+          />
+          <p className="mt-1 text-[12.5px] text-ink-500">
+            {t(
+              `أنجزت ${student.completedCredits} ساعة وتدرس ${enrolledCredits} ساعة هذا الفصل؛ يتبقى ${student.remainingCredits} ساعة حتى التخرج.`,
+              `${student.completedCredits} credit hours done and ${enrolledCredits} in progress this term; ${student.remainingCredits} to go.`
+            )}
+          </p>
+        </div>
+
+        {/* Facts strip */}
+        <div className="grid grid-cols-1 border-t border-ink-100 bg-ink-50/60 md:grid-cols-3">
+          <div className="px-5 py-5 sm:px-7">
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="text-[12.5px] font-medium text-ink-500">{t('المعدل التراكمي', 'Cumulative GPA')}</span>
+              <span className={cn('t-num text-[12px] font-bold', gpaDelta >= 0 ? 'text-sign-700' : 'text-signal-600')}>
+                {gpaDelta >= 0 ? '+' : '−'}
+                {Math.abs(gpaDelta).toFixed(2)} {t('عن الفصل السابق', 'vs last term')}
+              </span>
             </div>
+            <div className="mt-1 flex items-baseline gap-1.5">
+              <span className={cn('t-num text-[34px] font-extrabold leading-none', isAtRisk ? 'text-signal-600' : 'text-ink-950')}>
+                {student.cumulativeGpa.toFixed(2)}
+              </span>
+              <span className="text-[13px] text-ink-500">/ 4.00</span>
+            </div>
+            <GpaScale gpa={student.cumulativeGpa} className="mt-3" />
           </div>
-          <button
-            onClick={() => onNavigateTab('student-gpa-plan')}
-            className="shrink-0 px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition cursor-pointer shadow-xs"
-          >
-            {t('عرض خطة إنقاذ المعدل', 'View Recovery Plan')}
+
+          <div className="border-t border-ink-100 px-5 py-5 sm:px-7 md:border-s md:border-t-0">
+            <span className="text-[12.5px] font-medium text-ink-500">{t('الإنذارات المتتالية', 'Consecutive warnings')}</span>
+            <div className="mt-1 flex items-baseline gap-1.5">
+              <span className={cn('t-num text-[34px] font-extrabold leading-none', consecutive > 0 ? 'text-caution-600' : 'text-ink-950')}>
+                {student.consecutiveWarnings}
+              </span>
+              <span className="text-[13px] text-ink-500">{t(`من 4 (إجمالي ${student.warningCount})`, `of 4 (total ${student.warningCount})`)}</span>
+            </div>
+            <div className="mt-4 flex gap-1.5" aria-hidden="true">
+              {[0, 1, 2, 3].map(i => (
+                <span
+                  key={i}
+                  className={cn(
+                    'h-3 flex-1 rounded-sm',
+                    i < consecutive ? (i >= 2 ? 'bg-signal-500' : 'bg-caution-400') : 'bg-ink-200'
+                  )}
+                />
+              ))}
+            </div>
+            <p className="mt-2 text-[12px] leading-5 text-ink-500">
+              {t('أربعة إنذارات متتالية تعرّض الطالب للفصل حسب اللائحة.', 'Four consecutive warnings put a student at risk of dismissal.')}
+            </p>
+          </div>
+
+          <div className="border-t border-ink-100 px-5 py-5 sm:px-7 md:border-s md:border-t-0">
+            <span className="text-[12.5px] font-medium text-ink-500">{t('تقييم الخطر الأكاديمي', 'Academic risk')}</span>
+            <div className="mt-2">
+              <span className={cn(chipClass[riskTone[student.riskLevel] || 'ink'], '!h-8 !px-3 !text-[13.5px]')}>
+                <ShieldAlert aria-hidden="true" className="!h-4 !w-4" />
+                {pick(language, riskLabel[student.riskLevel], student.riskLevel)}
+              </span>
+            </div>
+            <p className="mt-3 line-clamp-3 text-[12.5px] leading-6 text-ink-600">
+              {student.riskReasons?.[0] || t('لا توجد مؤشرات خطر حالياً.', 'No risk signals right now.')}
+            </p>
+            <p className="mt-2 text-[12px] text-ink-500">
+              {t('التدريب الصيفي:', 'Summer training:')}{' '}
+              <span className="t-num font-semibold text-ink-800">{trainingHours}/240</span>{' '}
+              ({pick(language, trainingLabel[student.trainingStatus], student.trainingStatus)})
+            </p>
+          </div>
+        </div>
+      </Panel>
+
+      {/* ── Warning notice ─────────────────────────────────────────────────── */}
+      {isAtRisk && (
+        <div className="callout callout-signal flex-col sm:flex-row sm:items-center" role="alert">
+          <ShieldAlert aria-hidden="true" />
+          <div className="flex-1">
+            <p className="font-bold text-signal-800">
+              {t(
+                `أنت تحت الإنذار الأكاديمي (${student.warningCount} إنذار).`,
+                `You are on academic warning (${student.warningCount} warning${student.warningCount === 1 ? '' : 's'}).`
+              )}
+            </p>
+            <p className="text-signal-700">
+              {t(
+                `معدلك ${student.cumulativeGpa.toFixed(2)} أقل من 2.00، لذلك حدك ${creditCap} ساعة هذا الفصل. خطة التحسين تحدد ما تعيده من مقررات دون تأخير تخرجك.`,
+                `Your GPA of ${student.cumulativeGpa.toFixed(2)} is below 2.00, so you can take up to ${creditCap} credit hours. A recovery plan shows which courses to retake without delaying graduation.`
+              )}
+            </p>
+          </div>
+          <button type="button" onClick={() => onNavigateTab('student-gpa-plan')} className="btn btn-danger shrink-0">
+            <TrendingUp aria-hidden="true" />
+            {t('خطة تحسين المعدل', 'GPA recovery plan')}
           </button>
         </div>
       )}
 
-      {/* KPI Cards Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Cumulative GPA Card */}
-        <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs">
-          <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-bold">{t('المعدل التراكمي (GPA)', 'Cumulative GPA')}</span>
-            <Award className="w-4 h-4 text-indigo-600" />
-          </div>
-          <div className="flex items-baseline gap-2">
-            <span className={`text-3xl font-extrabold ${isAtRisk ? 'text-rose-600' : 'text-slate-900'}`}>
-              {student.cumulativeGpa.toFixed(2)}
-            </span>
-            <span className="text-xs text-slate-400">/ 4.00</span>
-          </div>
-          <div className="mt-2 flex items-center gap-1.5 text-xs font-medium">
-            {student.cumulativeGpa >= student.previousGpa ? (
-              <span className="text-emerald-600 flex items-center gap-0.5 font-bold">
-                <TrendingUp className="w-3.5 h-3.5" />
-                +{(student.cumulativeGpa - student.previousGpa).toFixed(2)}
-              </span>
-            ) : (
-              <span className="text-rose-600 flex items-center gap-0.5 font-bold">
-                <TrendingDown className="w-3.5 h-3.5" />
-                -{(student.previousGpa - student.cumulativeGpa).toFixed(2)}
-              </span>
-            )}
-            <span className="text-slate-400 text-[11px]">{t('عن الفصل السابق', 'from previous term')}</span>
-          </div>
-        </div>
+      {/* ── This term + next steps ─────────────────────────────────────────── */}
+      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+        <Panel>
+          <PanelHeader
+            icon={BookOpen}
+            title={t('مقررات هذا الفصل', 'This term’s courses')}
+            description={t('الحضور وأعمال السنة أولاً بأول. تحت 75% حضور يعني خطر الحرمان.', 'Attendance and coursework as they come in. Under 75% attendance risks exclusion.')}
+            actions={
+              <button type="button" onClick={() => onNavigateTab('student-registration')} className="btn btn-secondary btn-sm">
+                {t('تعديل التسجيل', 'Change registration')}
+              </button>
+            }
+          />
 
-        {/* Degree Progress */}
-        <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs">
-          <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-bold">{t('إنجاز الساعات المعتمدة', 'Completed Credits')}</span>
-            <BookOpen className="w-4 h-4 text-emerald-600" />
-          </div>
-          <div className="flex items-baseline gap-2">
-            <span className="text-3xl font-extrabold text-slate-900">{student.completedCredits}</span>
-            <span className="text-xs text-slate-400">/ 134 {t('ساعة', 'hrs')}</span>
-          </div>
-          <div className="mt-2">
-            <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-              <div
-                className="bg-indigo-600 h-2 rounded-full transition-all duration-500"
-                style={{ width: `${completionPct}%` }}
-              ></div>
-            </div>
-            <div className="flex justify-between text-[11px] text-slate-500 mt-1 font-medium">
-              <span>{completionPct}% {t('منجز', 'completed')}</span>
-              <span>{student.remainingCredits} {t('ساعة متبقية', 'hrs remaining')}</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Academic Warnings */}
-        <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs">
-          <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-bold">{t('الإنذارات الأكاديمية', 'Academic Warnings')}</span>
-            <AlertTriangle className={`w-4 h-4 ${student.warningCount > 0 ? 'text-amber-500' : 'text-slate-400'}`} />
-          </div>
-          <div className="flex items-baseline gap-2">
-            <span className={`text-3xl font-extrabold ${student.warningCount > 0 ? 'text-amber-600' : 'text-slate-900'}`}>
-              {student.warningCount}
-            </span>
-            <span className="text-xs text-slate-400">{t('إنذارات مسجلة', 'total warnings')}</span>
-          </div>
-          <p className="mt-2 text-[11px] text-slate-500 font-medium">
-            {student.consecutiveWarnings > 0
-              ? t(`(${student.consecutiveWarnings}) إنذار متتالٍ - الفصل عند (4)`, `(${student.consecutiveWarnings}) consecutive - Dismissal at 4`)
-              : t('الوضع الأكاديمي سليم ومستقر', 'No active warnings')}
-          </p>
-        </div>
-
-        {/* AI Risk Score */}
-        <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs">
-          <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-bold">{t('تقييم الخطر الأكاديمي الذكي', 'AI Risk Assessment')}</span>
-            <ShieldAlert className="w-4 h-4 text-purple-600" />
-          </div>
-          <div>
-            <span
-              className={`inline-block px-3 py-1 rounded-lg text-xs font-bold border ${
-                riskBadgeStyle[student.riskLevel] || 'bg-slate-100'
-              }`}
-            >
-              {language === 'ar'
-                ? riskLabelMap[student.riskLevel]?.ar || student.riskLevel
-                : riskLabelMap[student.riskLevel]?.en || student.riskLevel}
-            </span>
-          </div>
-          <p className="mt-2 text-[11px] text-slate-500 line-clamp-1 font-medium">
-            {student.riskReasons && student.riskReasons[0]
-              ? student.riskReasons[0]
-              : t('لا توجد مخاطر أكاديمية نشطة', 'No critical risks detected')}
-          </p>
-        </div>
-      </div>
-
-      {/* Quick Action Hub: Direct Links to all student modules */}
-      <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-            <Layers className="w-4 h-4 text-indigo-600" />
-            <span>{t('الخدمات والوحدات الأكاديمية للطالب', 'Student Academic Modules & Services')}</span>
-          </h3>
-          <span className="text-xs text-slate-400 font-medium">
-            {t('جميع الخدمات مفعلة ومتصلة بقاعدة البيانات', 'All live & synchronized')}
-          </span>
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-          <button
-            onClick={() => onNavigateTab('student-recommendations')}
-            className="flex flex-col items-center p-3 rounded-xl border border-slate-100 bg-slate-50 hover:bg-indigo-50/50 hover:border-indigo-200 text-center transition cursor-pointer group"
-          >
-            <div className="w-9 h-9 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center mb-2 group-hover:scale-105 transition">
-              <Sparkles className="w-4 h-4 text-amber-500" />
-            </div>
-            <span className="text-xs font-bold text-slate-800 group-hover:text-indigo-600">
-              {t('التوصيات الذكية', 'Recommendations')}
-            </span>
-            <span className="text-[10px] text-slate-400 mt-0.5">{t('المقررات المقترحة', 'Optimal Courses')}</span>
-          </button>
-
-          <button
-            onClick={() => onNavigateTab('student-study-plan')}
-            className="flex flex-col items-center p-3 rounded-xl border border-slate-100 bg-slate-50 hover:bg-indigo-50/50 hover:border-indigo-200 text-center transition cursor-pointer group"
-          >
-            <div className="w-9 h-9 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center mb-2 group-hover:scale-105 transition">
-              <Calendar className="w-4 h-4" />
-            </div>
-            <span className="text-xs font-bold text-slate-800 group-hover:text-indigo-600">
-              {t('خطة التخرج', 'Graduation Plan')}
-            </span>
-            <span className="text-[10px] text-slate-400 mt-0.5">{t('المسار الزمني', 'Semester Roadmap')}</span>
-          </button>
-
-          <button
-            onClick={() => onNavigateTab('student-what-if')}
-            className="flex flex-col items-center p-3 rounded-xl border border-slate-100 bg-slate-50 hover:bg-indigo-50/50 hover:border-indigo-200 text-center transition cursor-pointer group"
-          >
-            <div className="w-9 h-9 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center mb-2 group-hover:scale-105 transition">
-              <Calculator className="w-4 h-4" />
-            </div>
-            <span className="text-xs font-bold text-slate-800 group-hover:text-indigo-600">
-              {t('محاكي المعدل', 'What-If Sim')}
-            </span>
-            <span className="text-[10px] text-slate-400 mt-0.5">{t('حساب السيناريوهات', 'Scenario Sandbox')}</span>
-          </button>
-
-          <button
-            onClick={() => onNavigateTab('student-gpa-plan')}
-            className="flex flex-col items-center p-3 rounded-xl border border-slate-100 bg-slate-50 hover:bg-indigo-50/50 hover:border-indigo-200 text-center transition cursor-pointer group"
-          >
-            <div className="w-9 h-9 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center mb-2 group-hover:scale-105 transition">
-              <TrendingUp className="w-4 h-4 text-emerald-600" />
-            </div>
-            <span className="text-xs font-bold text-slate-800 group-hover:text-indigo-600">
-              {t('إنقاذ المعدل', 'GPA Recovery')}
-            </span>
-            <span className="text-[10px] text-slate-400 mt-0.5">{t('تعويض العجز النقطي', 'Deficit Planner')}</span>
-          </button>
-
-          <button
-            onClick={() => onNavigateTab('student-registration')}
-            className="flex flex-col items-center p-3 rounded-xl border border-slate-100 bg-slate-50 hover:bg-indigo-50/50 hover:border-indigo-200 text-center transition cursor-pointer group"
-          >
-            <div className="w-9 h-9 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center mb-2 group-hover:scale-105 transition">
-              <FileCheck2 className="w-4 h-4 text-indigo-600" />
-            </div>
-            <span className="text-xs font-bold text-slate-800 group-hover:text-indigo-600">
-              {t('تسجيل المقررات', 'Registration')}
-            </span>
-            <span className="text-[10px] text-slate-400 mt-0.5">{t('التسجيل الفصلي', 'Course Enrollment')}</span>
-          </button>
-
-          <button
-            onClick={() => onNavigateTab('student-training')}
-            className="flex flex-col items-center p-3 rounded-xl border border-slate-100 bg-slate-50 hover:bg-indigo-50/50 hover:border-indigo-200 text-center transition cursor-pointer group"
-          >
-            <div className="w-9 h-9 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center mb-2 group-hover:scale-105 transition">
-              <Briefcase className="w-4 h-4" />
-            </div>
-            <span className="text-xs font-bold text-slate-800 group-hover:text-indigo-600">
-              {t('التدريب الصيفي', 'Summer Training')}
-            </span>
-            <span className="text-[10px] text-slate-400 mt-0.5">{t('ساعات التدريب (240)', '240 Hours Req.')}</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Two Column Layout: In-Progress Courses & Risk Insights */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left: Active Enrolled Courses with Attendance & Marks */}
-        <div className="lg:col-span-2 bg-white rounded-2xl p-5 border border-slate-200 shadow-xs">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="text-sm font-bold text-slate-900">
-                {t('مقررات الفصل الحالي المسجلة (خريف 2026)', 'Current Enrolled Courses (Fall 2026)')}
-              </h3>
-              <p className="text-xs text-slate-500">
-                {t('متابعة نسبة الحضور وأعمال السنة أولاً بأول لتفادي الحرمان', 'Real-time attendance & coursework tracking')}
-              </p>
-            </div>
-            <button
-              onClick={() => onNavigateTab('student-registration')}
-              className="text-xs text-indigo-600 font-bold hover:underline flex items-center gap-1 cursor-pointer"
-            >
-              <span>{t('تعديل التسجيل', 'Manage')}</span>
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          <div className="divide-y divide-slate-100">
-            {currentRecords.length === 0 ? (
-              <div className="py-8 text-center text-xs text-slate-400">
-                {t('لم تقم بتسجيل مقررات للفصل الدراسي الحالي بعد', 'No courses enrolled yet for this term')}
-              </div>
-            ) : (
-              currentRecords.map((rec, idx) => {
+          {currentRecords.length === 0 ? (
+            <EmptyState
+              icon={CalendarCheck}
+              title={t('لا مقررات مسجلة هذا الفصل', 'No courses registered this term')}
+              description={t('ابنِ جدولك من صفحة التسجيل وسيظهر هنا.', 'Build your timetable on the registration page and it will show here.')}
+              action={
+                <button type="button" onClick={() => onNavigateTab('student-registration')} className="btn btn-primary btn-sm">
+                  {t('اذهب إلى التسجيل', 'Go to registration')}
+                </button>
+              }
+            />
+          ) : (
+            <ul className="divide-y divide-ink-100">
+              {currentRecords.map((rec, idx) => {
                 const att = rec.attendancePercentage ?? 100;
-                const isAttWarning = att < 75;
-
+                const attRisk = att < 75;
                 return (
-                  <div key={`${rec.courseCode}_${rec.semesterId || ''}_${idx}`} className="py-3 flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-700 font-bold text-xs flex items-center justify-center border border-indigo-100">
-                        {rec.credits}h
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-bold text-slate-900">
-                            {language === 'ar' ? rec.courseNameAr : rec.courseNameEn}
+                  <li key={`${rec.courseCode}_${rec.semesterId || ''}_${idx}`} className="grid grid-cols-1 gap-3 py-3.5 sm:grid-cols-[minmax(0,1fr)_200px] sm:items-center">
+                    <div className="flex min-w-0 items-start gap-3">
+                      <CodeBadge code={rec.courseCode} variant={rec.attempt > 1 ? 'signal' : 'solid'} />
+                      <div className="min-w-0">
+                        <p className="truncate text-[14px] font-semibold text-ink-900">{language === 'ar' ? rec.courseNameAr : rec.courseNameEn}</p>
+                        <p className="text-[12px] text-ink-500">
+                          {t(`${rec.credits} ساعات`, `${rec.credits} credits`)}
+                          <span className="mx-1.5 text-ink-300" aria-hidden="true">|</span>
+                          {t('أعمال السنة:', 'Coursework:')}{' '}
+                          <span className="t-num font-semibold text-ink-700">
+                            {rec.courseworkMark !== undefined ? `${rec.courseworkMark}/50` : t('لم ترصد بعد', 'not yet entered')}
                           </span>
-                          <span className="text-[10px] font-mono text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">
-                            {rec.courseCode}
-                          </span>
-                        </div>
-                        <div className="text-[11px] text-slate-500 mt-0.5 flex items-center gap-2">
-                          <span>
-                            {t('أعمال السنة:', 'Coursework:')}{' '}
-                            {rec.courseworkMark !== undefined ? `${rec.courseworkMark}/50` : t('قيد الرصد', 'Pending')}
-                          </span>
-                        </div>
+                        </p>
                       </div>
                     </div>
-
-                    {/* Attendance Pill */}
-                    <div className="text-right">
-                      <div className="flex items-center gap-1.5 justify-end">
-                        <span className={`text-xs font-bold ${isAttWarning ? 'text-rose-600' : 'text-slate-700'}`}>
-                          {att}%
-                        </span>
-                        <span className="text-[10px] text-slate-400">{t('حضور', 'attendance')}</span>
+                    <div>
+                      <div className="mb-1 flex items-center justify-between text-[12px]">
+                        <span className="text-ink-500">{t('الحضور', 'Attendance')}</span>
+                        <span className={cn('t-num font-bold', attRisk ? 'text-signal-600' : 'text-ink-800')}>{att}%</span>
                       </div>
-                      {isAttWarning && (
-                        <span className="inline-block text-[10px] text-rose-600 font-bold bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200 mt-0.5">
-                          {t('خطر حرمان (< 75%)', 'Ban Risk (< 75%)')}
-                        </span>
-                      )}
+                      <div className="relative">
+                        <Meter value={att} tone={attRisk ? 'signal' : 'sign'} label={t('نسبة الحضور', 'Attendance rate')} />
+                        {/* 75% threshold tick */}
+                        <span className="absolute -top-1 h-[14px] w-[2px] rounded bg-ink-700" style={{ insetInlineStart: '75%' }} aria-hidden="true" />
+                      </div>
+                      {attRisk && <p className="mt-1 text-[11.5px] font-semibold text-signal-600">{t('خطر حرمان: أقل من 75%', 'Exclusion risk: below 75%')}</p>}
                     </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </div>
-
-        {/* Right: AI Advising Insights Card */}
-        <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs flex flex-col justify-between">
-          <div>
-            <div className="flex items-center gap-2 text-indigo-600 mb-3">
-              <Sparkles className="w-5 h-5 text-amber-500" />
-              <h3 className="text-sm font-bold text-slate-900">
-                {t('تقرير المحرك الأكاديمي الذكي', 'AI Advising Diagnostic')}
-              </h3>
-            </div>
-
-            <div className="space-y-2.5 text-xs">
-              <p className="text-slate-600 font-medium">
-                {t('أبرز الملاحظات التشخيصية على سجلك الدراسي:', 'Key diagnostic insights on your record:')}
-              </p>
-              <ul className="space-y-1.5">
-                {student.riskReasons && student.riskReasons.length > 0 ? (
-                  student.riskReasons.map((r, i) => (
-                    <li key={i} className="flex items-start gap-2 text-slate-700 text-[11px] leading-relaxed">
-                      <span className="w-1.5 h-1.5 rounded-full bg-indigo-600 mt-1.5 shrink-0"></span>
-                      <span>{r}</span>
-                    </li>
-                  ))
-                ) : (
-                  <li className="text-slate-400 text-xs">
-                    {t('السجل الأكاديمي مستقر ولا توجد ملاحظات سلبية.', 'Academic record is healthy.')}
                   </li>
-                )}
-              </ul>
-            </div>
-          </div>
+                );
+              })}
+            </ul>
+          )}
+        </Panel>
 
-          <div className="mt-6 pt-4 border-t border-slate-100 space-y-2">
-            <button
-              onClick={() => onNavigateTab('student-study-plan')}
-              className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition cursor-pointer"
-            >
-              <span>{t('عرض خطة التخرج الكاملة', 'View Graduation Roadmap')}</span>
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => onNavigateTab('student-training')}
-              className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 text-xs font-semibold transition cursor-pointer"
-            >
-              <span>{t('متابعة التدريب الميداني الصيفي', 'Summer Field Training')}</span>
-            </button>
-          </div>
+        <div className="space-y-6">
+          <Panel>
+            <PanelHeader icon={Route} title={t('خطوتك التالية', 'Your next step')} description={t('مرتبة حسب وضعك الأكاديمي الآن.', 'Ordered by your academic situation right now.')} />
+            <ul className="-mx-2 space-y-1">
+              {nextSteps.map(step => {
+                const Icon = step.icon;
+                return (
+                  <li key={step.tab}>
+                    <button
+                      type="button"
+                      onClick={() => onNavigateTab(step.tab)}
+                      className="group flex w-full items-start gap-3 rounded-xl px-2 py-2.5 text-start transition hover:bg-ink-50"
+                    >
+                      <span
+                        className={cn(
+                          'mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-lg',
+                          step.tone === 'signal'
+                            ? 'bg-signal-500 text-white'
+                            : step.tone === 'sign'
+                            ? 'bg-sign-600 text-white'
+                            : 'bg-ink-100 text-ink-700'
+                        )}
+                      >
+                        <Icon className="h-4 w-4" aria-hidden="true" />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-[13.5px] font-bold text-ink-900">{step.title}</span>
+                        <span className="block text-[12.5px] leading-5 text-ink-500">{step.why}</span>
+                      </span>
+                      <Chevron className="mt-2 h-4 w-4 shrink-0 text-ink-300 transition group-hover:text-ink-700" aria-hidden="true" />
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </Panel>
+
+          <Panel>
+            <PanelHeader icon={NotebookPen} tone="caution" title={t('ملاحظات المستشار على سجلك', 'Advisor engine notes')} />
+            {student.riskReasons && student.riskReasons.length > 0 ? (
+              <ul className="space-y-2.5">
+                {student.riskReasons.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2.5 text-[13px] leading-6 text-ink-700">
+                    <span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-caution-500" aria-hidden="true" />
+                    <span>{r}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-[13px] text-ink-500">{t('سجلك مستقر ولا توجد ملاحظات سلبية.', 'Your record is healthy; nothing to flag.')}</p>
+            )}
+          </Panel>
         </div>
       </div>
 
-      {/* Complete Academic Transcript Section (كشف الدرجات والسجل الأكاديمي الشامل) */}
-      <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-xs space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+      {/* ── Course ledger ─────────────────────────────────────────────────── */}
+      <Panel padded={false}>
+        <div className="flex flex-col gap-4 p-5 sm:p-6 xl:flex-row xl:items-center xl:justify-between">
           <div>
-            <div className="flex items-center gap-2">
-              <FileText className="w-5 h-5 text-indigo-600" />
-              <h3 className="text-base font-bold text-slate-900">
-                {t('السجل الأكاديمي وكشف الدرجات التفصيلي (Academic Transcript)', 'Complete Academic Transcript & Course History')}
-              </h3>
-            </div>
-            <p className="text-xs text-slate-500 mt-0.5">
-              {t('سجل المقررات المسجلة والمجتازة مع التقديرات، النقاط، ونسب الحضور', 'Full historical record of all completed, in-progress, and failed courses')}
+            <h2 className="text-[16px] font-bold text-ink-950">{t('سجل المقررات', 'Course history')}</h2>
+            <p className="text-[12.5px] text-ink-500">
+              {t('كل مقرر درسته: التقدير، النقاط، الدرجات، والحضور.', 'Every course you have taken: grade, points, marks and attendance.')}
             </p>
           </div>
-
           <div className="flex flex-wrap items-center gap-2">
-            {/* Filter pills */}
-            <div className="inline-flex rounded-xl bg-slate-100 p-1 text-xs">
-              <button
-                onClick={() => setRecordFilter('ALL')}
-                className={`px-3 py-1 rounded-lg font-bold transition cursor-pointer ${
-                  recordFilter === 'ALL' ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                {t('الكل', 'All')} ({allRecords.length})
-              </button>
-              <button
-                onClick={() => setRecordFilter('PASSED')}
-                className={`px-3 py-1 rounded-lg font-bold transition cursor-pointer ${
-                  recordFilter === 'PASSED' ? 'bg-white text-emerald-600 shadow-xs' : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                {t('مجتاز', 'Passed')} ({passedRecords.length})
-              </button>
-              <button
-                onClick={() => setRecordFilter('FAILED')}
-                className={`px-3 py-1 rounded-lg font-bold transition cursor-pointer ${
-                  recordFilter === 'FAILED' ? 'bg-white text-rose-600 shadow-xs' : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                {t('رسوب', 'Failed')} ({failedRecords.length})
-              </button>
-              <button
-                onClick={() => setRecordFilter('IN_PROGRESS')}
-                className={`px-3 py-1 rounded-lg font-bold transition cursor-pointer ${
-                  recordFilter === 'IN_PROGRESS' ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                {t('الفصل الحالي', 'Current')} ({currentRecords.length})
-              </button>
-            </div>
-
-            <button
-              onClick={handleOpenTranscript}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition cursor-pointer"
-            >
-              <Printer className="w-3.5 h-3.5" />
-              <span>{t('طباعة كشف معتمد', 'Print Transcript')}</span>
+            <Segmented
+              ariaLabel={t('تصفية السجل', 'Filter records')}
+              value={recordFilter}
+              onChange={setRecordFilter}
+              options={[
+                { value: 'ALL', label: t('الكل', 'All'), count: allRecords.length },
+                { value: 'PASSED', label: t('ناجح', 'Passed'), count: passedRecords.length },
+                { value: 'FAILED', label: t('راسب', 'Failed'), count: failedRecords.length },
+                { value: 'IN_PROGRESS', label: t('الفصل الحالي', 'This term'), count: currentRecords.length },
+              ]}
+            />
+            <button type="button" onClick={() => setShowTranscriptModal(true)} className="btn btn-secondary">
+              <Printer aria-hidden="true" />
+              {t('طباعة كشف موثق', 'Print verified transcript')}
             </button>
           </div>
         </div>
 
-        {/* Table of Records */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs text-right divide-y divide-slate-100">
+        <div className="scroll-x border-t border-ink-100">
+          <table className="data-table min-w-[860px]">
             <thead>
-              <tr className="text-slate-400 font-bold bg-slate-50/70">
-                <th className="py-2.5 px-3">{t('كود المقرر', 'Course Code')}</th>
-                <th className="py-2.5 px-3">{t('اسم المقرر', 'Course Title')}</th>
-                <th className="py-2.5 px-3 text-center">{t('الساعات', 'Credits')}</th>
-                <th className="py-2.5 px-3 text-center">{t('الفصل الدراسي', 'Semester')}</th>
-                <th className="py-2.5 px-3 text-center">{t('التقدير', 'Grade')}</th>
-                <th className="py-2.5 px-3 text-center">{t('نقاط التقدير', 'Points')}</th>
-                <th className="py-2.5 px-3 text-center">{t('أعمال السنة / النهائي', 'Marks')}</th>
-                <th className="py-2.5 px-3 text-center">{t('نسبة الحضور', 'Attendance')}</th>
-                <th className="py-2.5 px-3 text-center">{t('الحالة الأكاديمية', 'Status')}</th>
+              <tr>
+                <th>{t('المقرر', 'Course')}</th>
+                <th className="num">{t('الساعات', 'Credits')}</th>
+                <th>{t('الفصل', 'Term')}</th>
+                <th className="num">{t('التقدير', 'Grade')}</th>
+                <th className="num">{t('النقاط', 'Points')}</th>
+                <th className="num">{t('أعمال السنة + النهائي', 'Coursework + final')}</th>
+                <th className="num">{t('الحضور', 'Attendance')}</th>
+                <th>{t('الحالة', 'Status')}</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody>
               {displayedRecords.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="py-8 text-center text-slate-400">
-                    {t('لا توجد مقررات في هذا التصنيف', 'No course records found for this filter')}
+                  <td colSpan={8} className="!py-10 text-center text-ink-500">
+                    {t('لا توجد مقررات في هذا التصنيف.', 'No courses in this view.')}
                   </td>
                 </tr>
               ) : (
                 displayedRecords.map((rec, idx) => {
-                  const isPassed = rec.status === 'PASSED';
-                  const isFailed = rec.status === 'FAILED';
-                  const isInProgress = rec.status === 'IN_PROGRESS' || rec.status === 'ENROLLED';
-
+                  const att = rec.attendancePercentage ?? 100;
+                  const hasMarks = rec.courseworkMark !== undefined || rec.finalMark !== undefined;
+                  const tone = recordTone[rec.status] || 'ink';
                   return (
-                    <tr key={`${rec.courseCode}_${idx}`} className="hover:bg-slate-50/50 transition">
-                      <td className="py-3 px-3 font-mono font-bold text-slate-900">
-                        {rec.courseCode}
+                    <tr key={`${rec.courseCode}_${idx}`}>
+                      <td>
+                        <div className="flex items-center gap-2.5">
+                          <CodeBadge code={rec.courseCode} />
+                          <span className="font-semibold text-ink-900">{language === 'ar' ? rec.courseNameAr : rec.courseNameEn}</span>
+                          {rec.attempt > 1 && <Chip tone="caution">{t(`محاولة ${rec.attempt}`, `Attempt ${rec.attempt}`)}</Chip>}
+                        </div>
                       </td>
-                      <td className="py-3 px-3 font-semibold text-slate-800">
-                        {language === 'ar' ? rec.courseNameAr : rec.courseNameEn}
-                      </td>
-                      <td className="py-3 px-3 text-center font-bold text-slate-700">
-                        {rec.credits}
-                      </td>
-                      <td className="py-3 px-3 text-center text-slate-500 font-medium">
-                        {rec.semesterName || 'خريف 2026'}
-                      </td>
-                      <td className="py-3 px-3 text-center font-mono font-bold">
+                      <td className="num font-semibold">{rec.credits}</td>
+                      <td className="whitespace-nowrap text-ink-500">{rec.semesterName || t('خريف 2026', 'Fall 2026')}</td>
+                      <td className="num">
                         {rec.grade ? (
-                          <span
-                            className={`px-2 py-0.5 rounded text-[11px] ${
-                              isPassed
-                                ? 'bg-emerald-50 text-emerald-700 font-bold border border-emerald-200'
-                                : 'bg-rose-50 text-rose-700 font-bold border border-rose-200'
-                            }`}
-                          >
-                            {rec.grade}
-                          </span>
+                          <span className={cn(chipClass[gradeTone(rec.grade)], 't-num !px-2.5 font-extrabold')}>{rec.grade}</span>
                         ) : (
-                          <span className="text-slate-400 font-normal">--</span>
+                          <span className="text-ink-300">—</span>
                         )}
                       </td>
-                      <td className="py-3 px-3 text-center font-mono font-bold text-slate-700">
-                        {rec.gradePoints !== undefined ? rec.gradePoints.toFixed(1) : '--'}
-                      </td>
-                      <td className="py-3 px-3 text-center text-slate-600">
-                        {rec.courseworkMark !== undefined || rec.finalMark !== undefined ? (
-                          <span>
+                      <td className="num font-semibold">{rec.gradePoints !== undefined ? rec.gradePoints.toFixed(1) : <span className="text-ink-300">—</span>}</td>
+                      <td className="num whitespace-nowrap">
+                        {hasMarks ? (
+                          <span className="t-num text-ink-600">
                             {rec.courseworkMark ?? 0} + {rec.finalMark ?? 0} ={' '}
-                            <strong>{(rec.courseworkMark ?? 0) + (rec.finalMark ?? 0)}/100</strong>
+                            <strong className="text-ink-900">{(rec.courseworkMark ?? 0) + (rec.finalMark ?? 0)}</strong>
                           </span>
                         ) : (
-                          <span className="text-slate-400">--</span>
+                          <span className="text-ink-300">—</span>
                         )}
                       </td>
-                      <td className="py-3 px-3 text-center">
-                        <span
-                          className={`font-bold ${
-                            (rec.attendancePercentage ?? 100) < 75 ? 'text-rose-600' : 'text-slate-700'
-                          }`}
-                        >
-                          {rec.attendancePercentage ?? 100}%
-                        </span>
+                      <td className="num">
+                        <span className={cn('t-num font-bold', att < 75 ? 'text-signal-600' : 'text-ink-700')}>{att}%</span>
                       </td>
-                      <td className="py-3 px-3 text-center">
-                        {isPassed && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                            <CheckCircle className="w-3 h-3" />
-                            <span>{t('ناجح', 'Passed')}</span>
-                          </span>
-                        )}
-                        {isFailed && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
-                            <AlertTriangle className="w-3 h-3" />
-                            <span>{t('راسب (إعادة)', 'Failed')}</span>
-                          </span>
-                        )}
-                        {isInProgress && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
-                            <Clock className="w-3 h-3" />
-                            <span>{t('قيد الدراسة', 'In Progress')}</span>
-                          </span>
-                        )}
+                      <td>
+                        <span className={chipClass[tone]}>{pick(language, recordLabel[rec.status], rec.status)}</span>
                       </td>
                     </tr>
                   );
@@ -725,175 +549,10 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigateTa
             </tbody>
           </table>
         </div>
-      </div>
+      </Panel>
 
-      {/* Official Transcript Modal / Report */}
       {showTranscriptModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-2xl max-w-3xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden border border-slate-200">
-            {/* Modal Header */}
-            <div className="p-4 bg-slate-900 text-white flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <FileText className="w-5 h-5 text-indigo-400" />
-                <h3 className="text-sm font-bold">
-                  {t('كشف الدرجات الرسمي والشهادة الرقمية المعتمدة', 'Official Digital Academic Transcript')}
-                </h3>
-              </div>
-              <button
-                onClick={() => setShowTranscriptModal(false)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg transition cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Modal Body */}
-            <div className="p-6 overflow-y-auto space-y-6 text-xs text-slate-800" id="transcript-printable">
-              {transcriptLoading ? (
-                <div className="py-16 text-center space-y-3">
-                  <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
-                  <p className="text-slate-500 font-medium">
-                    {t('جارٍ استخراج وتوثيق كشف الدرجات الرسمي وتوليد رمز QR...', 'Generating verifiable official transcript with QR verification...')}
-                  </p>
-                </div>
-              ) : (
-                <>
-                  {/* Official Header */}
-                  <div className="flex items-start justify-between border-b-2 border-slate-900 pb-4">
-                    <div>
-                      <h2 className="text-base font-extrabold text-slate-900">
-                        {t('جامعة مصر للعلوم والتكنولوجيا - كلية تكنولوجيا المعلومات', 'Must University - Faculty of Information Technology')}
-                      </h2>
-                      <p className="text-xs text-slate-600 font-medium">
-                        {t('نظام ابن الهيثم لشؤون التعليم والطلاب - كشف درجات أكاديمي معتمد', 'SIS Ibn Al-Haitham Engine - Official Academic Transcript')}
-                      </p>
-                    </div>
-                    <div className="text-left font-mono text-[10px] text-slate-500">
-                      <div>{t('تاريخ الاستخراج:', 'Issued:')} {new Date().toLocaleDateString('ar-EG')}</div>
-                      <div>{t('الرقم المرجعي:', 'Ref:')} SIS-TR-{student.studentCode}-{Date.now().toString().slice(-6)}</div>
-                    </div>
-                  </div>
-
-                  {/* Student Info Grid */}
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
-                    <div>
-                      <span className="text-[10px] text-slate-400 block">{t('اسم الطالب', 'Student Name')}</span>
-                      <strong className="text-xs text-slate-900">{student.nameAr}</strong>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-slate-400 block">{t('الرقم الجامعي', 'Student Code')}</span>
-                      <strong className="text-xs font-mono text-slate-900">{student.studentCode}</strong>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-slate-400 block">{t('البرنامج والمسار', 'Academic Track')}</span>
-                      <strong className="text-xs text-slate-900">{student.track}</strong>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-slate-400 block">{t('المعدل التراكمي (GPA)', 'Cumulative GPA')}</span>
-                      <strong className="text-xs text-indigo-700 font-bold">{student.cumulativeGpa.toFixed(2)} / 4.00</strong>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-slate-400 block">{t('الساعات المجتازة', 'Passed Credits')}</span>
-                      <strong className="text-xs text-slate-900">{student.completedCredits} / 134</strong>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-slate-400 block">{t('المرشد الأكاديمي', 'Academic Advisor')}</span>
-                      <strong className="text-xs text-slate-900">{student.advisorName}</strong>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-slate-400 block">{t('الإنذارات الأكاديمية', 'Warnings')}</span>
-                      <strong className="text-xs text-slate-900">{student.warningCount} {t('إنذار', 'warning(s)')}</strong>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-slate-400 block">{t('الحالة الأكاديمية', 'Standing')}</span>
-                      <strong className="text-xs text-emerald-700">{isAtRisk ? t('تحت الإنذار', 'Academic Warning') : t('سليم ومستقر', 'Regular')}</strong>
-                    </div>
-                  </div>
-
-                  {/* Course Records Table in Transcript */}
-                  <div>
-                    <h4 className="font-bold text-xs text-slate-800 mb-2">
-                      {t('سجل المقررات والنتائج المعتمدة:', 'Official Course Ledger & Results:')}
-                    </h4>
-                    <table className="w-full text-[11px] text-right divide-y divide-slate-200 border border-slate-200">
-                      <thead className="bg-slate-100 font-bold text-slate-600">
-                        <tr>
-                          <th className="p-2">{t('كود المقرر', 'Code')}</th>
-                          <th className="p-2">{t('اسم المقرر', 'Title')}</th>
-                          <th className="p-2 text-center">{t('الساعات', 'Cr.')}</th>
-                          <th className="p-2 text-center">{t('التقدير', 'Grade')}</th>
-                          <th className="p-2 text-center">{t('النقاط', 'Points')}</th>
-                          <th className="p-2 text-center">{t('الحالة', 'Status')}</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {allRecords.map((r, i) => (
-                          <tr key={i} className="hover:bg-slate-50">
-                            <td className="p-2 font-mono font-bold">{r.courseCode}</td>
-                            <td className="p-2">{language === 'ar' ? r.courseNameAr : r.courseNameEn}</td>
-                            <td className="p-2 text-center">{r.credits}</td>
-                            <td className="p-2 text-center font-mono font-bold">{r.grade || '--'}</td>
-                            <td className="p-2 text-center font-mono">{r.gradePoints !== undefined ? r.gradePoints.toFixed(1) : '--'}</td>
-                            <td className="p-2 text-center font-bold">
-                              {r.status === 'PASSED' ? (
-                                <span className="text-emerald-700">{t('ناجح', 'Passed')}</span>
-                              ) : r.status === 'FAILED' ? (
-                                <span className="text-rose-700">{t('راسب', 'Failed')}</span>
-                              ) : (
-                                <span className="text-indigo-700">{t('قيد الدراسة', 'In Progress')}</span>
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  {/* Official Footer with QR & Seal */}
-                  <div className="flex items-center justify-between pt-4 border-t border-slate-200">
-                    <div className="flex items-center gap-3">
-                      <div className="w-16 h-16 bg-slate-100 border border-slate-300 rounded-lg flex flex-col items-center justify-center p-1 text-center">
-                        <QrCode className="w-8 h-8 text-slate-800" />
-                        <span className="text-[8px] font-mono text-slate-500 mt-0.5">{t('رمز التحقق', 'Verify QR')}</span>
-                      </div>
-                      <div>
-                        <div className="font-bold text-xs text-slate-900">
-                          {t('وثيقة رقمية مشفرة وموقعة إلكترونياً', 'Cryptographically Verified Digital Document')}
-                        </div>
-                        <p className="text-[10px] text-slate-500">
-                          {t('يمكن التحقق من صحة هذا الكشف عبر مسح رمز الاستجابة السريعة (QR Code).', 'Authenticity can be verified via the QR Code.')}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="text-center font-serif text-[11px] text-slate-700 space-y-1">
-                      <div>{t('عميد الكلية وشؤون الطلاب', 'Dean of Academic Affairs')}</div>
-                      <div className="font-bold text-slate-900">{t('أ. د. عميد الكلية', 'Prof. Dean of Faculty')}</div>
-                      <div className="text-[9px] text-slate-400">{t('ختم رسمي إلكتروني', 'Official Electronic Seal')}</div>
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
-
-            {/* Modal Footer */}
-            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
-              <button
-                onClick={() => setShowTranscriptModal(false)}
-                className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-200 text-xs font-bold transition cursor-pointer"
-              >
-                {t('إغلاق', 'Close')}
-              </button>
-              <button
-                onClick={() => window.print()}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition shadow-sm cursor-pointer"
-              >
-                <Printer className="w-4 h-4" />
-                <span>{t('طباعة / تصدير PDF', 'Print / Export PDF')}</span>
-              </button>
-            </div>
-          </div>
-        </div>
+        <TranscriptReportModal studentId={student.id} onClose={() => setShowTranscriptModal(false)} />
       )}
     </div>
   );

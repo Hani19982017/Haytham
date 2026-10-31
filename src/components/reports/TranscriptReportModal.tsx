@@ -2,16 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { useLanguage } from '../../context/LanguageContext.js';
 import { api } from '../../services/api.js';
 import { VerifiedTranscriptReport } from '../../../server/reports/reportService.js';
-import {
-  FileText,
-  Printer,
-  ShieldCheck,
-  X,
-  QrCode,
-  GraduationCap,
-  Building,
-  CheckCircle2,
-} from 'lucide-react';
+import { INSTITUTION } from '../../config/institution.js';
+import { Modal, Loader, EmptyState, BrandMark, CodeBadge, cn, chipClass, gradeTone, personName } from '../ui/index.js';
+import { Printer, ShieldCheck, AlertCircle, BadgeCheck, RotateCcw } from 'lucide-react';
 
 interface TranscriptModalProps {
   studentId: string;
@@ -23,6 +16,8 @@ export const TranscriptReportModal: React.FC<TranscriptModalProps> = ({ studentI
   const [report, setReport] = useState<VerifiedTranscriptReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [qrFailed, setQrFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     async function loadTranscript() {
@@ -33,172 +28,201 @@ export const TranscriptReportModal: React.FC<TranscriptModalProps> = ({ studentI
         if (data && data.verificationToken) {
           setReport(data);
         } else {
-          setError(t('تعذر تحميل السجل الأكاديمي الرسمي لهذا الطالب.', 'Could not load official transcript for this student.'));
+          setError(t('تعذر إصدار السجل الموثق لهذا الطالب.', 'The verified transcript could not be issued for this student.'));
         }
       } catch (err: any) {
         console.error('Failed to load transcript:', err);
-        setError(err?.message || t('حدث خطأ أثناء استخراج السجل الموثق.', 'Failed to generate verified transcript.'));
+        setError(
+          err?.response?.data?.messageAr && language === 'ar'
+            ? err.response.data.messageAr
+            : t('تعذر إصدار السجل الموثق. تأكد من اتصال الخادم ثم أعد المحاولة.', 'The verified transcript could not be issued. Check the server connection and try again.')
+        );
       } finally {
         setLoading(false);
       }
     }
     loadTranscript();
-  }, [studentId]);
+  }, [studentId, attempt]);
 
-  if (loading) {
-    return (
-      <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl p-8 flex flex-col items-center gap-3 shadow-xl">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
-          <span className="text-xs font-bold text-slate-600">{t('جارٍ استخراج وتوثيق السجل الأكاديمي الرسمي...', 'Generating Official Verified Transcript...')}</span>
-        </div>
-      </div>
-    );
-  }
+  const issued = report
+    ? new Date(report.issuedAt).toLocaleDateString(language === 'ar' ? 'ar-EG-u-nu-latn' : 'en-GB', {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+      })
+    : '';
 
-  if (error || !report) {
-    return (
-      <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl p-6 max-w-md w-full flex flex-col items-center gap-4 text-center shadow-xl">
-          <div className="text-xs font-bold text-rose-600">{error || t('السجل غير متوفر حالياً', 'Transcript unavailable')}</div>
-          <button
-            onClick={onClose}
-            className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold hover:bg-slate-800 cursor-pointer"
-          >
-            {t('إغلاق', 'Close')}
-          </button>
-        </div>
-      </div>
-    );
-  }
+  const totalCredits = report?.totalRequiredCredits || INSTITUTION.totalCredits;
+  const goodStanding = (report?.cumulativeGpa ?? 0) >= 2;
+  const qrPayload = report
+    ? `${INSTITUTION.universityAr} - ${INSTITUTION.facultyAr}\nسجل أكاديمي موثق\nالطالب: ${report.studentNameAr}\nالكود: ${report.studentCode}\nالمعدل: ${(report.cumulativeGpa ?? 0).toFixed(2)}\nالساعات: ${report.completedCredits}/${totalCredits}\nرمز التحقق: ${report.verificationToken}\nالرابط: ${window.location.origin}/api/reports/verify/${report.verificationToken}`
+    : '';
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full p-8 my-8 relative print:m-0 print:p-4 print:shadow-none animate-in fade-in zoom-in-95">
-        {/* Actions Bar */}
-        <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-6 print:hidden">
-          <div className="flex items-center gap-2">
-            <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-800 text-xs font-bold border border-emerald-200">
-              <ShieldCheck className="w-4 h-4 text-emerald-600" />
-              {t('مستند رقمي موثق رسمياً ومرتبط برمز استجابة سريع (QR)', 'Tamper-Proof Digitally Verified Transcript')}
+    <Modal
+      onClose={onClose}
+      size="xl"
+      icon={ShieldCheck}
+      title={t('السجل الأكاديمي الموثق', 'Verified academic transcript')}
+      subtitle={t('مستند رسمي برمز تحقق يمكن مسحه بكاميرا الهاتف', 'An official document with a scannable verification code')}
+      closeLabel={t('إغلاق', 'Close')}
+      footer={
+        <>
+          <button type="button" onClick={onClose} className="btn btn-ghost">
+            {t('إغلاق', 'Close')}
+          </button>
+          <button type="button" onClick={() => window.print()} className="btn btn-primary" disabled={!report}>
+            <Printer aria-hidden="true" />
+            {t('طباعة أو حفظ PDF', 'Print or save as PDF')}
+          </button>
+        </>
+      }
+    >
+      {loading ? (
+        <Loader compact label={t('جارٍ إصدار السجل الموثق…', 'Issuing the verified transcript…')} />
+      ) : error || !report ? (
+        <EmptyState
+          icon={AlertCircle}
+          tone="signal"
+          title={t('لم يصدر السجل', 'Transcript not issued')}
+          description={error || t('السجل غير متوفر حالياً.', 'The transcript is not available right now.')}
+          action={
+            <button type="button" className="btn btn-secondary" onClick={() => setAttempt(a => a + 1)}>
+              <RotateCcw aria-hidden="true" />
+              {t('أعد المحاولة', 'Try again')}
+            </button>
+          }
+        />
+      ) : (
+        <article className="text-ink-900">
+          {/* Letterhead */}
+          <div className="flex items-start justify-between gap-4 border-b-[3px] border-sign-600 pb-4">
+            <div>
+              <p className="text-[15px] font-extrabold">{language === 'ar' ? INSTITUTION.universityAr : INSTITUTION.universityEn}</p>
+              <p className="text-[13px] font-semibold text-ink-700">{language === 'ar' ? INSTITUTION.facultyAr : INSTITUTION.facultyEn}</p>
+              <p className="text-[12px] text-ink-500">{language === 'ar' ? INSTITUTION.officeAr : INSTITUTION.officeEn}</p>
+            </div>
+            <BrandMark size={48} />
+          </div>
+
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-[12px] text-ink-500">
+            <span>
+              {t('تاريخ الإصدار:', 'Issued on:')} <span className="font-semibold text-ink-800">{issued}</span>
+            </span>
+            <span>
+              {t('رقم المستند:', 'Document no.:')}{' '}
+              <span className="font-semibold text-ink-800" dir="ltr">
+                {report.verificationToken.slice(0, 15)}
+              </span>
             </span>
           </div>
 
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => window.print()}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition cursor-pointer"
-            >
-              <Printer className="w-4 h-4" />
-              <span>{t('طباعة المستند', 'Print Transcript')}</span>
-            </button>
-            <button
-              onClick={onClose}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 cursor-pointer"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-        </div>
-
-        {/* University Official Header */}
-        <div className="flex items-center justify-between border-b-2 border-slate-900 pb-5 mb-6">
-          <div className="text-right">
-            <div className="font-extrabold text-sm text-slate-900">{t('جامعة القاهرة - كلية الحاسبات والذكاء الاصطناعي', 'Faculty of Computers & Artificial Intelligence')}</div>
-            <div className="text-xs text-slate-600">{t('وكالة الكلية لشؤون التعليم والطلاب', 'Office of Education & Student Affairs')}</div>
-            <div className="text-[11px] text-slate-500">{t('برنامج علوم الحاسب بنظام الساعات المعتمدة', 'Credit-Hour Computer Science Degree Program')}</div>
-          </div>
-
-          <div className="w-14 h-14 rounded-2xl bg-indigo-900 text-white flex items-center justify-center font-extrabold shadow-sm">
-            <GraduationCap className="w-8 h-8 text-amber-300" />
-          </div>
-
-          <div className="text-left font-mono text-[10px] text-slate-400">
-            <div>DOC: TRANSCRIPT-OFFICIAL</div>
-            <div>VERIFIED: YES</div>
-            <div>SEAL: FACULTY-SIS-V4</div>
-          </div>
-        </div>
-
-        {/* Student Metadata Card */}
-        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-6 grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
-          <div>
-            <span className="text-slate-400 block text-[10px] font-bold">{t('اسم الطالب', 'Student Name')}</span>
-            <span className="font-extrabold text-slate-900">{language === 'ar' ? report.studentNameAr : report.studentNameEn}</span>
-          </div>
-          <div>
-            <span className="text-slate-400 block text-[10px] font-bold">{t('كود الطالب الجامعي', 'Student Code')}</span>
-            <span className="font-mono font-extrabold text-indigo-700">{report.studentCode}</span>
-          </div>
-          <div>
-            <span className="text-slate-400 block text-[10px] font-bold">{t('المعدل التراكمي (GPA)', 'Cumulative GPA')}</span>
-            <span className="font-extrabold text-slate-900">{(report.cumulativeGpa ?? 0).toFixed(2)} / 4.00</span>
-          </div>
-          <div>
-            <span className="text-slate-400 block text-[10px] font-bold">{t('الساعات المنجزة', 'Earned Hours')}</span>
-            <span className="font-extrabold text-slate-900">{report.completedCredits ?? 0} / 134 {t('ساعة', 'hrs')}</span>
-          </div>
-        </div>
-
-        {/* Academic Records Table */}
-        <div className="border border-slate-200 rounded-xl overflow-hidden mb-6">
-          <table className="w-full text-right text-xs">
-            <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
-              <tr>
-                <th className="px-4 py-2.5">{t('كود المقرر', 'Course Code')}</th>
-                <th className="px-4 py-2.5">{t('اسم المقرر الأكاديمي', 'Course Title')}</th>
-                <th className="px-4 py-2.5 text-center">{t('الساعات', 'Credits')}</th>
-                <th className="px-4 py-2.5 text-center">{t('التقدير', 'Grade')}</th>
-                <th className="px-4 py-2.5">{t('الفصل الدراسي', 'Term')}</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {(report.courses || []).map((c, i) => (
-                <tr key={i} className="hover:bg-slate-50">
-                  <td className="px-4 py-2 font-mono font-bold text-slate-800">{c.code}</td>
-                  <td className="px-4 py-2 text-slate-900">{language === 'ar' ? c.nameAr : c.nameEn}</td>
-                  <td className="px-4 py-2 text-center font-bold">{c.credits}</td>
-                  <td className="px-4 py-2 text-center font-bold text-indigo-700">{c.grade}</td>
-                  <td className="px-4 py-2 text-slate-500 text-[11px]">{c.semester}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Footer with QR Code & Verification Info */}
-        <div className="border-t-2 border-slate-200 pt-4 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            {/* Scannable QR Code Box */}
-            <div className="w-24 h-24 bg-white rounded-xl p-1.5 flex flex-col items-center justify-center shrink-0 border-2 border-slate-900 shadow-xs">
-              <img
-                src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&margin=2&data=${encodeURIComponent(
-                  `جامعة القاهرة - كلية الحاسبات\nسجل أكاديمي موثق\nالطالب: ${report.studentNameAr}\nالكود: ${report.studentCode}\nالمعدل: ${(report.cumulativeGpa ?? 0).toFixed(2)}\nالساعات: ${report.completedCredits}/134\nرمز التحقق: ${report.verificationToken}\nالرابط: ${window.location.origin}/api/reports/verify/${report.verificationToken}`
-                )}`}
-                alt="Official Verification QR"
-                className="w-16 h-16 object-contain"
-              />
-              <span className="text-[7px] font-mono font-bold text-slate-900 mt-0.5">SCAN TO VERIFY</span>
+          {/* Student */}
+          <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-4 rounded-xl border border-ink-200 bg-ink-50 p-4 sm:grid-cols-3">
+            <div className="kv col-span-2 sm:col-span-1">
+              <dt>{t('اسم الطالب', 'Student')}</dt>
+              <dd>{personName(language === 'ar' ? report.studentNameAr : report.studentNameEn, language)}</dd>
             </div>
-            <div className="text-[11px] text-slate-500 leading-relaxed">
-              <div className="font-bold text-slate-800 mb-0.5">{t('رمز التحقق الرقمي الأكاديمي المعتمد:', 'Official Cryptographic Verification Code:')}</div>
-              <div className="font-mono text-indigo-700 font-extrabold text-xs">{report.verificationToken}</div>
-              <div className="text-[10px] text-slate-400 mt-0.5">
-                {t('امسح رمز QR بكاميرا الهاتف لعرض بيانات التصديق الرسمية ورمز التحقق.', 'Scan QR with your phone camera to view official verification data.')}
+            <div className="kv">
+              <dt>{t('الرقم الجامعي', 'Student code')}</dt>
+              <dd className="t-num">{report.studentCode}</dd>
+            </div>
+            <div className="kv">
+              <dt>{t('البرنامج', 'Programme')}</dt>
+              <dd>{language === 'ar' ? report.degreeProgramAr : report.degreeProgramEn}</dd>
+            </div>
+            <div className="kv">
+              <dt>{t('المعدل التراكمي', 'Cumulative GPA')}</dt>
+              <dd className="t-num">{(report.cumulativeGpa ?? 0).toFixed(2)} / 4.00</dd>
+            </div>
+            <div className="kv">
+              <dt>{t('الساعات المكتسبة', 'Credits earned')}</dt>
+              <dd className="t-num">
+                {report.completedCredits ?? 0} / {totalCredits}
+              </dd>
+            </div>
+            <div className="kv">
+              <dt>{t('الوضع الأكاديمي', 'Academic standing')}</dt>
+              <dd className={goodStanding ? 'text-sign-700' : 'text-signal-600'}>
+                {language === 'ar' ? report.academicStandingAr : report.academicStandingEn}
+              </dd>
+            </div>
+          </dl>
+
+          {/* Courses */}
+          <h3 className="mb-2 mt-6 text-[14px] font-bold">{t('المقررات المجتازة', 'Courses passed')}</h3>
+          <div className="overflow-hidden rounded-xl border border-ink-200">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>{t('المقرر', 'Course')}</th>
+                  <th className="num">{t('الساعات', 'Credits')}</th>
+                  <th className="num">{t('التقدير', 'Grade')}</th>
+                  <th>{t('الفصل', 'Term')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(report.courses || []).length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="!py-8 text-center text-ink-500">
+                      {t('لا توجد مقررات مجتازة بعد.', 'No courses passed yet.')}
+                    </td>
+                  </tr>
+                ) : (
+                  (report.courses || []).map((c, i) => (
+                    <tr key={`${c.code}_${i}`}>
+                      <td>
+                        <div className="flex items-center gap-2.5">
+                          <CodeBadge code={c.code} />
+                          <span className="font-medium">{language === 'ar' ? c.nameAr : c.nameEn}</span>
+                        </div>
+                      </td>
+                      <td className="num font-semibold">{c.credits}</td>
+                      <td className="num">
+                        <span className={cn(chipClass[gradeTone(c.grade)], 't-num font-extrabold')}>{c.grade}</span>
+                      </td>
+                      <td className="whitespace-nowrap text-ink-500">{c.semester}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Verification */}
+          <div className="mt-6 flex flex-col gap-5 border-t border-ink-200 pt-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-4">
+              <div className="grid h-[104px] w-[104px] shrink-0 place-items-center rounded-xl border-2 border-ink-900 bg-white p-1.5">
+                {!qrFailed ? (
+                  <img
+                    src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&margin=0&data=${encodeURIComponent(qrPayload)}`}
+                    alt={t('رمز التحقق QR', 'Verification QR code')}
+                    className="h-full w-full object-contain"
+                    onError={() => setQrFailed(true)}
+                  />
+                ) : (
+                  <span className="px-1 text-center text-[10.5px] leading-4 text-ink-500">
+                    {t('رمز QR يحتاج اتصالاً بالإنترنت', 'QR code needs an internet connection')}
+                  </span>
+                )}
+              </div>
+              <div className="min-w-0 text-[12.5px] leading-6">
+                <p className="font-bold text-ink-900">{t('رمز التحقق', 'Verification code')}</p>
+                <p className="break-all font-bold text-sign-700" dir="ltr">
+                  {report.verificationToken}
+                </p>
+                <p className="text-ink-500">
+                  {t('امسح الرمز بكاميرا الهاتف للتأكد من صحة المستند.', 'Scan the code with a phone camera to confirm the document is genuine.')}
+                </p>
               </div>
             </div>
-          </div>
-
-          <div className="text-center sm:text-left text-xs text-slate-500">
-            <div className="text-[10px] text-slate-400">{t('تاريخ الإصدار الرسمي', 'Official Issuance Date')}</div>
-            <div className="font-bold text-slate-700">{new Date(report.issuedAt).toLocaleDateString(language === 'ar' ? 'ar-EG' : 'en-US')}</div>
-            <div className="mt-2 text-[10px] font-bold text-emerald-700 flex items-center justify-center sm:justify-start gap-1">
-              <CheckCircle2 className="w-3.5 h-3.5" />
-              <span>{t('معتمد إلكترونياً من شؤون الطلاب', 'Electronically Accredited')}</span>
+            <div className="flex items-center gap-2 self-start rounded-xl border border-sign-200 bg-sign-50 px-3 py-2 text-[12.5px] font-bold text-sign-800 sm:self-center">
+              <BadgeCheck className="h-5 w-5 text-sign-600" aria-hidden="true" />
+              {t('معتمد إلكترونياً من شؤون الطلاب', 'Electronically certified by Student Affairs')}
             </div>
           </div>
-        </div>
-      </div>
-    </div>
+        </article>
+      )}
+    </Modal>
   );
 };
