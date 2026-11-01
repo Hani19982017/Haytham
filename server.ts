@@ -7,6 +7,12 @@ import { Socket } from 'net';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import { apiRouter } from './server/routes/api.js';
+import { buildSeedNotifications } from './server/data/seedNotifications.js';
+import { NotificationRepository } from './server/repositories/notificationRepository.js';
+import { StudentRepository } from './server/repositories/studentRepository.js';
+import { OfferingRepository } from './server/repositories/offeringRepository.js';
+import { CourseRepository } from './server/repositories/courseRepository.js';
+import { AcademicRuleRepository } from './server/repositories/academicRuleRepository.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -84,8 +90,32 @@ async function ensureDatabaseRunning(): Promise<void> {
   }
 }
 
+/**
+ * Give every account its starting notifications in the database (built from the
+ * data that is there now). Safe on every start: existing rows and their read
+ * state are kept. Without a database the in-memory notifications are used.
+ */
+async function ensureStartingNotifications(): Promise<void> {
+  try {
+    const [students, offerings, courses, rules] = await Promise.all([
+      StudentRepository.listAll(),
+      OfferingRepository.listAll(),
+      CourseRepository.listAll(),
+      AcademicRuleRepository.listAll(),
+    ]);
+    const added = await NotificationRepository.seedDefaults(
+      undefined,
+      buildSeedNotifications({ students, offerings, courses, rules })
+    );
+    if (added) console.log(`[Notifications] Added ${added} starting notifications.`);
+  } catch (err: any) {
+    console.warn('[Notifications] Database not available; using in-memory notifications.', err?.message || '');
+  }
+}
+
 async function startServer() {
   await ensureDatabaseRunning();
+  await ensureStartingNotifications();
 
   const app = express();
 

@@ -6,6 +6,7 @@ import {
   INITIAL_ACADEMIC_RULES,
   INITIAL_NOTIFICATIONS,
 } from '../server/data/store.js';
+import { NotificationRepository } from '../server/repositories/notificationRepository.js';
 import bcrypt from 'bcryptjs';
 
 export async function seedDatabase() {
@@ -367,6 +368,10 @@ export async function seedDatabase() {
       },
     });
   }
+
+  // 8. Seed each account's starting notifications (built from the data above)
+  const notificationCount = await NotificationRepository.seedDefaults(prisma, INITIAL_NOTIFICATIONS);
+  console.log(`Seeded ${notificationCount} notifications.`);
 
   console.log('✅ PostgreSQL seed successfully completed!');
 }

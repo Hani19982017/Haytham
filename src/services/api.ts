@@ -358,14 +358,19 @@ export const api = {
     return res.data;
   },
 
-  // Notifications
-  async getNotifications(recipientId?: string): Promise<NotificationItem[]> {
-    const res = await axiosClient.get('/notifications', { params: { recipientId: recipientId || '' } });
+  // Notifications (the server returns only the signed-in user's own)
+  async getNotifications(): Promise<NotificationItem[]> {
+    const res = await axiosClient.get('/notifications');
     return res.data;
   },
 
   async markNotificationRead(id: string): Promise<any> {
-    const res = await axiosClient.post(`/notifications/${id}/read`);
+    const res = await axiosClient.post(`/notifications/${encodeURIComponent(id)}/read`);
+    return res.data;
+  },
+
+  async markAllNotificationsRead(): Promise<{ success: boolean; updated: number }> {
+    const res = await axiosClient.post('/notifications/read-all');
     return res.data;
   },
 

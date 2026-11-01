@@ -134,6 +134,9 @@ async function addAuditLog(
   }
 }
 
+// Display name without the demo-account label, e.g. "عمر فاروق (طالب - تحت الإنذار)" → "عمر فاروق".
+const plainName = (raw?: string) => (raw || '').split('(')[0].trim() || raw || '';
+
 // Security: Resolve calling user from headers
 function getCaller(req: Request): any {
   const userIdHeader = req.headers['x-user-id'] as string;
@@ -169,10 +172,12 @@ function getCaller(req: Request): any {
   return null;
 }
 
-// Global RBAC middleware: Enforce Process Officer read-only policy
+// Global RBAC middleware: Enforce Process Officer read-only policy.
+// Signing in/out and marking one's own notifications as read are not data changes.
 apiRouter.use((req: Request, res: Response, next) => {
   const caller = getCaller(req);
-  if (caller && caller.role === 'PROCESS_OFFICER' && req.method !== 'GET') {
+  const isPersonalAction = req.path.startsWith('/auth/') || req.path.startsWith('/notifications');
+  if (caller && caller.role === 'PROCESS_OFFICER' && req.method !== 'GET' && !isPersonalAction) {
     return res.status(403).json({
       error: 'FORBIDDEN_READ_ONLY',
       messageAr: 'مسؤول شؤون الطلاب لديه صلاحية قراءة واطلاع فقط، ولا يجوز له إجراء تعديلات أو عمليات تسجيل.',
@@ -854,8 +859,8 @@ apiRouter.post('/students/:id/study-plan/submit', async (req: Request, res: Resp
       type: 'APPROVAL',
       titleAr: 'طلب مراجعة واعتماد خطة دراسية جديدة',
       titleEn: 'Study Plan Approval Request',
-      messageAr: `قام الطالب ${student.nameAr} (${student.studentCode}) بتقديم خطته الدراسية لمراجعتها واعتمادها.`,
-      messageEn: `Student ${student.nameEn} (${student.studentCode}) submitted their study plan for advisor review.`,
+      messageAr: `خطة دراسية جديدة من ${plainName(student.nameAr)} (${student.studentCode}) بانتظار مراجعتك واعتمادك.`,
+      messageEn: `${plainName(student.nameEn)} (${student.studentCode}) submitted a study plan for your review.`,
     });
 
     await addAuditLog(
@@ -1213,10 +1218,10 @@ apiRouter.post('/students/:id/submit-proposed-schedule', async (req: Request, re
     await NotificationRepository.create({
       recipientId: student.advisorId || 'adv_dr_mahmoud',
       type: 'APPROVAL',
-      titleAr: `طلب اعتماد جدول فصلي جديد: ${student.nameAr}`,
-      titleEn: `New Semester Schedule Review: ${student.nameEn}`,
-      messageAr: `قام الطالب ${student.nameAr} (${student.studentCode}) بإرسال جدول مقترح مكون من ${selectedOfferings.length} مقررات بانتظار مراجعتك واعتمادك.`,
-      messageEn: `Student ${student.nameEn} submitted a proposed schedule with ${selectedOfferings.length} courses awaiting your review.`,
+      titleAr: `طلب اعتماد جدول فصلي: ${plainName(student.nameAr)}`,
+      titleEn: `Semester schedule to review: ${plainName(student.nameEn)}`,
+      messageAr: `جدول مقترح من ${plainName(student.nameAr)} (${student.studentCode}) يضم ${selectedOfferings.length} مقررات بانتظار مراجعتك واعتمادك.`,
+      messageEn: `${plainName(student.nameEn)} (${student.studentCode}) sent a proposed schedule with ${selectedOfferings.length} courses for your review.`,
     });
 
     return res.json({
@@ -1279,7 +1284,7 @@ apiRouter.post('/advisors/approve-schedule', async (req: Request, res: Response)
 
       await NotificationRepository.create({
         recipientId: studentId,
-        type: 'APPROVAL',
+        type: 'REGISTRATION',
         titleAr: 'تهانينا: تم اعتماد جدولك الدراسي رسمياً',
         titleEn: 'Congratulations: Semester Schedule Officially Approved',
         messageAr: `تمت مراجعة واعتماد جدولك الدراسي للفصل الحالي من قِبل المرشد الأكاديمي (${caller?.nameAr || 'د. محمود صقر'}). المقررات مسجلة رسمياً الآن.`,
@@ -1310,7 +1315,7 @@ apiRouter.post('/advisors/approve-schedule', async (req: Request, res: Response)
 
       await NotificationRepository.create({
         recipientId: studentId,
-        type: 'WARNING',
+        type: 'REGISTRATION',
         titleAr: 'إشعار من المرشد الأكاديمي: مطلوب تعديل الجدول',
         titleEn: 'Advisor Notice: Schedule Changes Required',
         messageAr: `طلب المرشد الأكاديمي تعديل جدولك المقترح. الملاحظات: ${notes || 'يرجى تعديل المقررات واختيار شعب بديلة'}.`,
@@ -1522,7 +1527,7 @@ apiRouter.post('/advisors/:id/assign-students', async (req: Request, res: Respon
     // 4. Create Notification for Advisor
     await NotificationRepository.createNotification({
       recipientId: advisor?.userId || advisorDbId || 'user_advisor',
-      type: 'INFO',
+      type: 'GENERAL',
       titleAr: 'تم إسناد طلاب جدد لمتابعتهم أكاديمياً',
       titleEn: 'New Students Assigned to Your Advising Roster',
       messageAr: `قام مدير النظام بإسناد ${studentIds.length} طالب إلى قائمتك للإشراف الأكاديمي ومتابعة خطط التخرج.`,
@@ -1621,7 +1626,7 @@ apiRouter.post('/advisor/plans/:studentId/decision', async (req: Request, res: R
       titleAr: decision === 'APPROVE' ? 'تم اعتماد خطتك الدراسية' : 'ملاحظات المرشد على الخطة الدراسية',
       titleEn: decision === 'APPROVE' ? 'Study Plan Approved' : 'Advisor Plan Feedback',
       messageAr: `قرار المرشد الأكاديمي: ${decision === 'APPROVE' ? 'اعتماد نهائي' : 'مطلوب تعديل'}. ملاحظات: ${notes || 'لا توجد ملاحظات إضافية'}.`,
-      messageEn: `Advisor decision: ${decision}. Notes: ${notes || 'No extra notes'}.`,
+      messageEn: `Advisor decision: ${decision === 'APPROVE' ? 'approved' : decision === 'REJECT' ? 'rejected' : 'changes requested'}. Notes: ${notes || 'No extra notes'}.`,
     });
 
     await addAuditLog(
@@ -1710,6 +1715,16 @@ apiRouter.post('/instructor/courses/:code/grades', async (req: Request, res: Res
     );
 
     const st = result.updatedStudent!;
+    const finalGrade = result.gradeAssigned?.finalGrade;
+    await NotificationRepository.createNotification({
+      recipientId: studentId,
+      type: 'GRADE',
+      titleAr: `رُصدت درجتك في ${code}`,
+      titleEn: `Your grade for ${code} was posted`,
+      messageAr: `أعمال السنة ${Number(courseworkMark ?? 0)} من 50 والامتحان النهائي ${Number(finalMark ?? 0)} من 50${finalGrade ? `، والتقدير ${finalGrade}` : ''}. معدلك التراكمي الآن ${Number(st.cumulativeGpa).toFixed(2)}.`,
+      messageEn: `Coursework ${Number(courseworkMark ?? 0)}/50 and final exam ${Number(finalMark ?? 0)}/50${finalGrade ? `, grade ${finalGrade}` : ''}. Your cumulative GPA is now ${Number(st.cumulativeGpa).toFixed(2)}.`,
+    });
+
     return res.json({
       success: true,
       newCumulativeGpa: st.cumulativeGpa,
@@ -1756,11 +1771,23 @@ apiRouter.post('/instructor/courses/:code/attendance', async (req: Request, res:
       await NotificationRepository.createNotification({
         recipientId: student.id,
         type: 'RISK',
-        titleAr: `إنذار غياب في مقرر ${code}`,
-        titleEn: `Attendance Warning in ${code}`,
-        messageAr: `نسبة حضورك انخفضت إلى (${attendancePercentage}%). النسبة الأدنى لدخول الاختبار النهائي هي 75%.`,
-        messageEn: `Attendance dropped to (${attendancePercentage}%). Minimum required is 75%.`,
+        titleAr: `تنبيه حضور في ${code}`,
+        titleEn: `Attendance alert in ${code}`,
+        messageAr: `نسبة حضورك في ${code} (${record.courseNameAr}) أصبحت ${attendancePercentage}% وهي أقل من الحد الأدنى 75%. استمرار الغياب قد يحرمك من دخول الامتحان النهائي.`,
+        messageEn: `Your attendance in ${code} (${record.courseNameEn}) is now ${attendancePercentage}%, below the 75% minimum. More absences can bar you from the final exam.`,
       });
+
+      // Let the student's advisor know as well.
+      if (student.advisorId) {
+        await NotificationRepository.createNotification({
+          recipientId: student.advisorId,
+          type: 'RISK',
+          titleAr: `حضور منخفض: ${plainName(student.nameAr)}`,
+          titleEn: `Low attendance: ${plainName(student.nameEn)}`,
+          messageAr: `أصبحت نسبة حضور ${plainName(student.nameAr)} (${student.studentCode}) في ${code} ${attendancePercentage}%، وهي أقل من الحد الأدنى 75%.`,
+          messageEn: `${plainName(student.nameEn)} (${student.studentCode}) is now at ${attendancePercentage}% attendance in ${code}, below the 75% minimum.`,
+        });
+      }
     }
 
     const newRisk = AcademicRiskEngine.evaluateRisk(student);
@@ -2484,20 +2511,41 @@ apiRouter.post('/admin/import/students-excel', excelUpload.single('file'), async
 
 // -------------------------------------------------------------
 // 8. NOTIFICATIONS (PostgreSQL-authoritative)
+// Personal: the signed-in user only ever sees and updates their own.
 // -------------------------------------------------------------
+const notificationAuthError = {
+  error: 'UNAUTHORIZED',
+  messageAr: 'غير مصرح: يرجى تسجيل الدخول.',
+  messageEn: 'Unauthorized: Authentication required.',
+};
+
 apiRouter.get('/notifications', async (req: Request, res: Response) => {
+  const caller = getCaller(req);
+  if (!caller) return res.status(401).json(notificationAuthError);
   try {
-    const { recipientId } = req.query;
-    const list = await NotificationRepository.listForRecipient(recipientId ? String(recipientId) : undefined);
-    return res.json(list);
+    return res.json(await NotificationRepository.listFor(caller));
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/notifications/read-all', async (req: Request, res: Response) => {
+  const caller = getCaller(req);
+  if (!caller) return res.status(401).json(notificationAuthError);
+  try {
+    const updated = await NotificationRepository.markAllRead(caller);
+    return res.json({ success: true, updated });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
 });
 
 apiRouter.post('/notifications/:id/read', async (req: Request, res: Response) => {
+  const caller = getCaller(req);
+  if (!caller) return res.status(401).json(notificationAuthError);
   try {
-    await NotificationRepository.markRead(req.params.id);
+    const updated = await NotificationRepository.markRead(req.params.id, caller);
+    if (!updated) return res.status(404).json({ error: 'NOTIFICATION_NOT_FOUND' });
     return res.json({ success: true });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });

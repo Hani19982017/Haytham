@@ -9,6 +9,7 @@ import {
   TrainingStatus,
 } from '../../src/types/index.js';
 import { AcademicRiskEngine } from '../engines/riskEngine.js';
+import { buildSeedNotifications } from './seedNotifications.js';
 
 export const INITIAL_COURSES: Course[] = [
   // Basic Sciences
@@ -1353,41 +1354,14 @@ export const INITIAL_AUDIT_LOGS: AuditLogItem[] = [
   },
 ];
 
-export const INITIAL_NOTIFICATIONS: NotificationItem[] = [
-  {
-    id: 'notif_1',
-    recipientId: 'stu_omar',
-    type: 'WARNING',
-    titleAr: 'تنبيه أكاديمي عاجل: إنذار أكاديمي رقم 2',
-    titleEn: 'Urgent Academic Warning: Warning #2',
-    messageAr: 'معدلك التراكمي (1.78) تحت الحد الأدنى. تم إعداد خطة تحسين المعدل وعليك مراجعة المرشد الأكاديمي.',
-    messageEn: 'Your cumulative GPA (1.78) is below 2.0. A GPA recovery plan has been generated; please consult your advisor.',
-    createdAt: '2026-10-04T11:00:00Z',
-    read: false,
-  },
-  {
-    id: 'notif_2',
-    recipientId: 'stu_omar',
-    type: 'RISK',
-    titleAr: 'تنبيه نسبة الحضور في مقرر CS 210',
-    titleEn: 'Attendance Warning in CS 210',
-    messageAr: 'نسبة حضورك الحالية هي 68%، وهي أقل من النسبة الإلزامية (75%). استمرار الغياب يعرضك للحرمان من الامتحان النهائي.',
-    messageEn: 'Your current attendance is 68%, below the mandatory 75% threshold. Continued absences risk exam disqualification.',
-    createdAt: '2026-10-03T15:30:00Z',
-    read: false,
-  },
-  {
-    id: 'notif_3',
-    recipientId: 'adv_dr_mahmoud',
-    type: 'RISK',
-    titleAr: 'طالب في حالة خطر حرج (خطر فصل وشيك)',
-    titleEn: 'Student at Critical Dismissal Risk',
-    messageAr: 'الطالب يوسف إبراهيم الجمل لديه 3 إنذارات متتالية ومعدل 1.45، بحاجة لتدخل إرشادي فوري.',
-    messageEn: 'Student Youssef Ibrahim has 3 consecutive warnings and GPA 1.45; requires immediate advisory intervention.',
-    createdAt: '2026-10-04T08:15:00Z',
-    read: true,
-  },
-];
+// Starting notifications for every account, worked out from the data above
+// (see seedNotifications.ts). Also inserted into PostgreSQL by prisma/seed.ts.
+export const INITIAL_NOTIFICATIONS: NotificationItem[] = buildSeedNotifications({
+  students: INITIAL_STUDENTS,
+  offerings: INITIAL_OFFERINGS,
+  courses: INITIAL_COURSES,
+  rules: INITIAL_ACADEMIC_RULES,
+});
 
 export const INITIAL_STUDY_PLANS: StudyPlan[] = [
   {

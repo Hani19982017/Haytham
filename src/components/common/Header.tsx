@@ -1,9 +1,9 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.js';
 import { useLanguage } from '../../context/LanguageContext.js';
 import { api } from '../../services/api.js';
-import { NotificationItem } from '../../types/index.js';
+import { NotificationItem, UserRole } from '../../types/index.js';
 import { TranscriptReportModal } from '../reports/TranscriptReportModal.js';
 import { CommandPalette } from './CommandPalette.js';
 import { RouteNav } from './RouteNav.js';
@@ -17,7 +17,8 @@ import {
   LogOut,
   UserCog,
   ShieldAlert,
-  CheckCircle2,
+  TriangleAlert,
+  ClipboardCheck,
   Info,
   CalendarCheck,
   BookOpen,
@@ -60,10 +61,11 @@ const initialsOf = (name?: string): string => {
 const notifIcon = (type: NotificationItem['type']) => {
   switch (type) {
     case 'WARNING':
-    case 'RISK':
       return { Icon: ShieldAlert, cls: 'bg-signal-50 text-signal-600' };
+    case 'RISK':
+      return { Icon: TriangleAlert, cls: 'bg-caution-50 text-caution-600' };
     case 'APPROVAL':
-      return { Icon: CheckCircle2, cls: 'bg-sign-50 text-sign-600' };
+      return { Icon: ClipboardCheck, cls: 'bg-sign-50 text-sign-600' };
     case 'REGISTRATION':
       return { Icon: CalendarCheck, cls: 'bg-lane-50 text-lane-600' };
     case 'GRADE':
@@ -72,6 +74,42 @@ const notifIcon = (type: NotificationItem['type']) => {
       return { Icon: Info, cls: 'bg-ink-100 text-ink-600' };
   }
 };
+
+/** The page a notification opens. Mirrors the type convention in server/data/seedNotifications.ts. */
+const notificationTarget = (role: UserRole, type: NotificationItem['type']): string | null => {
+  switch (role) {
+    case 'STUDENT': {
+      const byType: Record<NotificationItem['type'], string> = {
+        WARNING: 'student-gpa-plan',
+        RISK: 'student-dashboard',
+        APPROVAL: 'student-study-plan',
+        REGISTRATION: 'student-registration',
+        GRADE: 'student-dashboard',
+        GENERAL: 'student-training',
+      };
+      return byType[type] ?? 'student-dashboard';
+    }
+    case 'ACADEMIC_ADVISOR':
+      if (type === 'APPROVAL' || type === 'REGISTRATION') return 'advisor-plans';
+      return type === 'GENERAL' ? 'advisor-students' : 'advisor-dashboard';
+    case 'INSTRUCTOR':
+      return type === 'RISK' ? 'instructor-attendance' : 'instructor-grades';
+    case 'DEPARTMENT_HEAD':
+      if (type === 'REGISTRATION') return 'head-seats';
+      return type === 'RISK' ? 'head-hotspots' : 'head-analytics';
+    case 'ADMIN':
+      if (type === 'WARNING') return 'admin-rules';
+      if (type === 'REGISTRATION') return 'admin-offerings';
+      return type === 'GENERAL' ? 'admin-users' : 'admin-dashboard';
+    case 'PROCESS_OFFICER':
+      return 'process-records';
+    default:
+      return null;
+  }
+};
+
+/** How often the open app checks for new notifications. */
+const NOTIFICATION_REFRESH_MS = 30_000;
 
 export const Header: React.FC<HeaderProps> = ({ currentTab, onSelectTab }) => {
   const { currentUser, logout } = useAuth();
@@ -88,17 +126,35 @@ export const Header: React.FC<HeaderProps> = ({ currentTab, onSelectTab }) => {
   useDismiss(notifRef, showNotifMenu, () => setShowNotifMenu(false));
   useDismiss(userRef, showUserMenu, () => setShowUserMenu(false));
 
-  useEffect(() => {
-    async function loadNotifs() {
-      try {
-        const notifs = await api.getNotifications(currentUser?.studentId || currentUser?.id);
-        setNotifications(notifs);
-      } catch (err) {
-        console.error('Error fetching notifications:', err);
-      }
+  // Notifications belong to the signed-in account: the server returns only theirs.
+  // Reload when the account changes, then keep the list fresh while the app is open.
+  const userId = currentUser?.id;
+  const notifRequest = useRef(0);
+  const loadNotifications = useCallback(async () => {
+    const request = ++notifRequest.current;
+    try {
+      const list = await api.getNotifications();
+      if (request === notifRequest.current) setNotifications(list);
+    } catch (err) {
+      console.error('Error fetching notifications:', err);
     }
-    if (currentUser) loadNotifs();
-  }, [currentUser]);
+  }, []);
+
+  useEffect(() => {
+    notifRequest.current += 1; // drop any answer still on its way for the previous account
+    setNotifications([]);
+    if (!userId) return;
+    loadNotifications();
+    const timer = window.setInterval(() => {
+      if (!document.hidden) loadNotifications();
+    }, NOTIFICATION_REFRESH_MS);
+    const onFocus = () => loadNotifications();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [userId, loadNotifications]);
 
   // Ctrl/⌘ + K opens the command palette from anywhere.
   useEffect(() => {
@@ -117,36 +173,56 @@ export const Header: React.FC<HeaderProps> = ({ currentTab, onSelectTab }) => {
   const displayName = currentUser ? personName(language === 'ar' ? currentUser.nameAr : currentUser.nameEn, language) : '';
 
   const markAllRead = async () => {
-    const unread = notifications.filter(n => !n.read);
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-    for (const n of unread) {
-      try {
-        await api.markNotificationRead(n.id);
-      } catch (err) {
-        console.error('Failed to mark notification read:', err);
-      }
-    }
-  };
-
-  const markOneRead = async (n: NotificationItem) => {
-    if (n.read) return;
-    setNotifications(prev => prev.map(x => (x.id === n.id ? { ...x, read: true } : x)));
     try {
-      await api.markNotificationRead(n.id);
+      await api.markAllNotificationsRead();
     } catch (err) {
-      console.error('Failed to mark notification read:', err);
+      console.error('Failed to mark notifications read:', err);
+      loadNotifications();
     }
   };
 
+  /** Mark the notification read and open the page it is about. */
+  const openNotification = (n: NotificationItem) => {
+    if (!n.read) {
+      setNotifications(prev => prev.map(x => (x.id === n.id ? { ...x, read: true } : x)));
+      api.markNotificationRead(n.id).catch(err => console.error('Failed to mark notification read:', err));
+    }
+    const target = currentUser ? notificationTarget(currentUser.role, n.type) : null;
+    if (target) {
+      setShowNotifMenu(false);
+      onSelectTab(target);
+    }
+  };
+
+  const dateLocale = language === 'ar' ? 'ar-EG-u-nu-latn' : 'en-GB';
   const formatDate = (iso: string) => {
     try {
-      return new Date(iso).toLocaleDateString(language === 'ar' ? 'ar-EG-u-nu-latn' : 'en-GB', {
+      return new Date(iso).toLocaleDateString(dateLocale, {
         day: 'numeric',
         month: 'long',
         year: 'numeric',
       });
     } catch {
       return iso;
+    }
+  };
+
+  /** "5 minutes ago", "yesterday"… for the last week, then the date. */
+  const formatWhen = (iso: string) => {
+    const time = new Date(iso).getTime();
+    if (Number.isNaN(time)) return iso;
+    const minutes = Math.round((Date.now() - time) / 60000);
+    if (minutes < 0 || minutes >= 7 * 24 * 60) return formatDate(iso);
+    if (minutes < 1) return t('الآن', 'Just now');
+    try {
+      const rtf = new Intl.RelativeTimeFormat(dateLocale, { numeric: 'auto' });
+      if (minutes < 60) return rtf.format(-minutes, 'minute');
+      const hours = Math.round(minutes / 60);
+      if (hours < 24) return rtf.format(-hours, 'hour');
+      return rtf.format(-Math.round(hours / 24), 'day');
+    } catch {
+      return formatDate(iso);
     }
   };
 
@@ -235,6 +311,7 @@ export const Header: React.FC<HeaderProps> = ({ currentTab, onSelectTab }) => {
               <button
                 type="button"
                 onClick={() => {
+                  if (!showNotifMenu) loadNotifications();
                   setShowNotifMenu(v => !v);
                   setShowUserMenu(false);
                 }}
@@ -272,7 +349,7 @@ export const Header: React.FC<HeaderProps> = ({ currentTab, onSelectTab }) => {
                           <li key={n.id}>
                             <button
                               type="button"
-                              onClick={() => markOneRead(n)}
+                              onClick={() => openNotification(n)}
                               className={cn('flex w-full items-start gap-3 px-4 py-3 text-start transition hover:bg-ink-50', !n.read && 'bg-route-50/70')}
                             >
                               <span className={cn('mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg', cls)}>
@@ -286,7 +363,9 @@ export const Header: React.FC<HeaderProps> = ({ currentTab, onSelectTab }) => {
                                 <span className="mt-0.5 block text-[12.5px] leading-6 text-ink-600">
                                   {language === 'ar' ? n.messageAr : n.messageEn}
                                 </span>
-                                <span className="mt-1 block text-[11.5px] text-ink-400">{formatDate(n.createdAt)}</span>
+                                <time dateTime={n.createdAt} title={formatDate(n.createdAt)} className="mt-1 block text-[11.5px] text-ink-400">
+                                  {formatWhen(n.createdAt)}
+                                </time>
                               </span>
                             </button>
                           </li>
