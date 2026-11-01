@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useLanguage } from '../../context/LanguageContext.js';
 import { api } from '../../services/api.js';
-import { VerifiedTranscriptReport } from '../../../server/reports/reportService.js';
+import type { VerifiedTranscriptReport } from '../../../server/reports/reportService.js';
 import { INSTITUTION } from '../../config/institution.js';
 import { Modal, Loader, EmptyState, BrandMark, CodeBadge, cn, chipClass, gradeTone, personName } from '../ui/index.js';
 import { Printer, ShieldCheck, AlertCircle, BadgeCheck, RotateCcw } from 'lucide-react';
@@ -16,7 +16,6 @@ export const TranscriptReportModal: React.FC<TranscriptModalProps> = ({ studentI
   const [report, setReport] = useState<VerifiedTranscriptReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [qrFailed, setQrFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
@@ -54,9 +53,12 @@ export const TranscriptReportModal: React.FC<TranscriptModalProps> = ({ studentI
 
   const totalCredits = report?.totalRequiredCredits || INSTITUTION.totalCredits;
   const goodStanding = (report?.cumulativeGpa ?? 0) >= 2;
-  const qrPayload = report
-    ? `${INSTITUTION.universityAr} - ${INSTITUTION.facultyAr}\nسجل أكاديمي موثق\nالطالب: ${report.studentNameAr}\nالكود: ${report.studentCode}\nالمعدل: ${(report.cumulativeGpa ?? 0).toFixed(2)}\nالساعات: ${report.completedCredits}/${totalCredits}\nرمز التحقق: ${report.verificationToken}\nالرابط: ${window.location.origin}/api/reports/verify/${report.verificationToken}`
-    : '';
+  // Verification codes look like VT-<student code>-<GPA>-<credits>-<issue stamp>-<signature>.
+  const tokenParts = report?.verificationToken.split('-') ?? [];
+  const documentNumber = tokenParts.length === 6 ? `VT-${tokenParts[1]}-${tokenParts[4]}` : report?.verificationToken.slice(0, 15) ?? '';
+
+  // The QR code holds only the short verification link (made on the server), so phones read it easily.
+  const qrImage = report?.qrSvg ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(report.qrSvg)}` : null;
 
   return (
     <Modal
@@ -112,7 +114,7 @@ export const TranscriptReportModal: React.FC<TranscriptModalProps> = ({ studentI
             <span>
               {t('رقم المستند:', 'Document no.:')}{' '}
               <span className="font-semibold text-ink-800" dir="ltr">
-                {report.verificationToken.slice(0, 15)}
+                {documentNumber}
               </span>
             </span>
           </div>
@@ -192,17 +194,12 @@ export const TranscriptReportModal: React.FC<TranscriptModalProps> = ({ studentI
           {/* Verification */}
           <div className="mt-6 flex flex-col gap-5 border-t border-ink-200 pt-5 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-4">
-              <div className="grid h-[104px] w-[104px] shrink-0 place-items-center rounded-xl border-2 border-ink-900 bg-white p-1.5">
-                {!qrFailed ? (
-                  <img
-                    src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&margin=0&data=${encodeURIComponent(qrPayload)}`}
-                    alt={t('رمز التحقق QR', 'Verification QR code')}
-                    className="h-full w-full object-contain"
-                    onError={() => setQrFailed(true)}
-                  />
+              <div className="grid h-[136px] w-[136px] shrink-0 place-items-center rounded-xl border-2 border-ink-900 bg-white p-1">
+                {qrImage ? (
+                  <img src={qrImage} alt={t('رمز QR للتحقق من المستند', 'QR code to verify this document')} className="h-full w-full" />
                 ) : (
                   <span className="px-1 text-center text-[10.5px] leading-4 text-ink-500">
-                    {t('رمز QR يحتاج اتصالاً بالإنترنت', 'QR code needs an internet connection')}
+                    {t('رمز QR غير متاح', 'QR code unavailable')}
                   </span>
                 )}
               </div>
@@ -212,8 +209,30 @@ export const TranscriptReportModal: React.FC<TranscriptModalProps> = ({ studentI
                   {report.verificationToken}
                 </p>
                 <p className="text-ink-500">
-                  {t('امسح الرمز بكاميرا الهاتف للتأكد من صحة المستند.', 'Scan the code with a phone camera to confirm the document is genuine.')}
+                  {t(
+                    'امسح الرمز بكاميرا الهاتف لفتح صفحة التحقق من المستند وبيانات الطالب.',
+                    'Scan with a phone camera to open the verification page with the student’s record.'
+                  )}
                 </p>
+                {report.verificationUrl && (
+                  <a
+                    href={report.verificationUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    dir="ltr"
+                    className="no-print block break-all text-[11.5px] leading-5 text-lane-600 underline underline-offset-2 hover:text-lane-700"
+                  >
+                    {report.verificationUrl}
+                  </a>
+                )}
+                {report.verificationReachable === false && (
+                  <p className="no-print mt-1 text-[11.5px] leading-5 text-caution-700">
+                    {t(
+                      'الرابط يعمل على هذا الجهاز فقط (localhost)، فلن يفتح من الموبايل. اضبط PUBLIC_APP_URL على عنوان يصل إليه الموبايل.',
+                      'This link only works on this computer (localhost), so a phone cannot open it. Set PUBLIC_APP_URL to an address the phone can reach.'
+                    )}
+                  </p>
+                )}
               </div>
             </div>
             <div className="flex items-center gap-2 self-start rounded-xl border border-sign-200 bg-sign-50 px-3 py-2 text-[12.5px] font-bold text-sign-800 sm:self-center">

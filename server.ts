@@ -7,6 +7,7 @@ import { Socket } from 'net';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import { apiRouter } from './server/routes/api.js';
+import { verificationRouter } from './server/reports/verificationPage.js';
 import { buildSeedNotifications } from './server/data/seedNotifications.js';
 import { NotificationRepository } from './server/repositories/notificationRepository.js';
 import { StudentRepository } from './server/repositories/studentRepository.js';
@@ -158,6 +159,9 @@ async function startServer() {
   // Mount API Router under both /api/v1 (RESTful standards) and /api (compatibility)
   app.use('/api/v1', apiRouter);
   app.use('/api', apiRouter);
+
+  // Public page opened by the QR code on verified transcripts (no sign-in).
+  app.use('/verify', verificationRouter);
 
   // Health check endpoint
   app.get(['/api/health', '/api/v1/health'], (req, res) => {

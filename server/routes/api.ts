@@ -2556,22 +2556,39 @@ apiRouter.post('/notifications/:id/read', async (req: Request, res: Response) =>
 // 9. OFFICIAL REPORTS & QR VERIFICATION (Tamper-Proof Transcripts)
 // -------------------------------------------------------------
 apiRouter.get('/reports/transcript/:studentId', async (req: Request, res: Response) => {
+  const caller = getCaller(req);
+  if (!caller) {
+    return res.status(401).json({
+      error: 'UNAUTHORIZED',
+      messageAr: 'غير مصرح: يرجى تسجيل الدخول.',
+      messageEn: 'Unauthorized: Authentication required.',
+    });
+  }
   try {
     const student = await StudentRepository.findById(req.params.studentId);
     if (!student) return res.status(404).json({ error: 'Student not found' });
 
-    const hostUrl = req.protocol + '://' + req.get('host');
-    const report = UniversityReportService.generateOfficialTranscript(student, hostUrl);
+    // A verified transcript is an official document: students can only issue their own.
+    if (caller.role === 'STUDENT' && student.id !== caller.studentId && student.studentCode !== caller.studentId) {
+      return res.status(403).json({
+        error: 'ROLE_FORBIDDEN',
+        messageAr: 'يمكنك إصدار سجلك الأكاديمي فقط.',
+        messageEn: 'You can only issue your own transcript.',
+      });
+    }
+
+    // The QR code links to the public verification page (/verify/<code>) on an address phones can open.
+    const report = await UniversityReportService.generateOfficialTranscript(student, req);
 
     await addAuditLog(
-      student.id,
-      student.nameAr,
-      'STUDENT',
+      caller.id,
+      caller.nameAr,
+      caller.role,
       'GENERATE_TRANSCRIPT',
       'OfficialTranscript',
       report.verificationToken,
-      `استخراج كشف درجات وبيان حالة رسمي للطالب مع رمز التحقق المشفر (${report.verificationToken}) من PostgreSQL.`,
-      `Generated official verified transcript for student (${student.nameEn}) from PostgreSQL.`
+      `إصدار سجل أكاديمي موثق للطالب ${plainName(student.nameAr)} (${student.studentCode}) برمز التحقق ${report.verificationToken}.`,
+      `Issued a verified transcript for ${plainName(student.nameEn)} (${student.studentCode}) with verification code ${report.verificationToken}.`
     );
 
     return res.json(report);
@@ -2580,12 +2597,14 @@ apiRouter.get('/reports/transcript/:studentId', async (req: Request, res: Respon
   }
 });
 
-apiRouter.get('/reports/verify/:token', (req: Request, res: Response) => {
-  const result = UniversityReportService.verifyTranscriptToken(req.params.token);
-  if (!result.verified) {
-    return res.status(404).json(result);
+// JSON form of the public verification page (/verify/<code>).
+apiRouter.get('/reports/verify/:token', async (req: Request, res: Response) => {
+  try {
+    const result = await UniversityReportService.verifyTranscript(req.params.token);
+    return res.status(result.valid ? 200 : 404).json({ verified: result.valid, ...result });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
   }
-  return res.json(result);
 });
 
 // -------------------------------------------------------------
