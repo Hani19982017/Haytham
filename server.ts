@@ -8,6 +8,7 @@ import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import { apiRouter } from './server/routes/api.js';
 import { verificationRouter } from './server/reports/verificationPage.js';
+import { prepareDatabase } from './server/db/prepare.js';
 import { buildSeedNotifications } from './server/data/seedNotifications.js';
 import { NotificationRepository } from './server/repositories/notificationRepository.js';
 import { StudentRepository } from './server/repositories/studentRepository.js';
@@ -40,18 +41,23 @@ if (!process.env.DATABASE_URL) {
 async function ensureDatabaseRunning(): Promise<void> {
   const dbUrl = process.env.DATABASE_URL;
   const isRemote = dbUrl && !dbUrl.includes('127.0.0.1') && !dbUrl.includes('localhost');
-  
+
+  if (process.env.NODE_ENV === 'production' && !hasCustomDatabaseUrl) {
+    console.warn('[Database] WARNING: DATABASE_URL environment variable is missing on Render. Please configure DATABASE_URL in Environment. Using in-memory demo data.');
+    return;
+  }
+
+  // An existing database (Render, Docker, cloud): create the tables and load the demo data if it is empty.
   if (isRemote) {
     console.log('[Database] Remote PostgreSQL DATABASE_URL detected. Connecting directly to cloud database.');
+    await prepareDatabase();
     return;
   }
 
   // In production (e.g. Render / Cloud), never spawn embedded PGlite subprocess to stay within 512MB RAM limit
   if (process.env.NODE_ENV === 'production') {
-    if (!hasCustomDatabaseUrl) {
-      console.warn('[Database] WARNING: DATABASE_URL environment variable is missing on Render. Please configure DATABASE_URL in Environment.');
-    }
     console.log('[Database] Production environment detected. Skipping local embedded PGlite server.');
+    await prepareDatabase();
     return;
   }
 
@@ -87,7 +93,9 @@ async function ensureDatabaseRunning(): Promise<void> {
     }
     console.warn('[Database] Could not confirm port 5432 within timeout.');
   } else {
+    // PostgreSQL already running on this computer (installed locally or in Docker).
     console.log('[Database] PostgreSQL port 5432 is active.');
+    await prepareDatabase();
   }
 }
 

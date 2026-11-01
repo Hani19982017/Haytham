@@ -13,7 +13,10 @@ ENV NODE_ENV=production
 ENV PORT=3000
 
 COPY package*.json ./
-RUN npm install --omit=dev
+# The schema and seed are needed at runtime: the server creates the tables and
+# loads the demo data into an empty database on start.
+COPY --from=builder /app/prisma ./prisma
+RUN npm install --omit=dev && npx prisma generate
 
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/server ./server
