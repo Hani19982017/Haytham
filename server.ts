@@ -75,19 +75,8 @@ async function ensureDatabaseRunning(): Promise<void> {
       await new Promise((r) => setTimeout(r, 200));
       if (await checkPort(5432)) {
         console.log('[Database] PostgreSQL port 5432 is now active.');
-        try {
-          const { execSync } = await import('child_process');
-          // Pass DATABASE_URL through env (the inline `VAR=value cmd` form only works in bash, not on Windows).
-          execSync('npx prisma db push --skip-generate', {
-            stdio: 'ignore',
-            env: { ...process.env, DATABASE_URL: 'postgresql://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable' },
-          });
-          const { seedDatabase } = await import('./prisma/seed.js');
-          await seedDatabase();
-          console.log('[Database] Schema pushed and database seeded successfully.');
-        } catch (seedErr) {
-          console.warn('[Database] Seed note:', seedErr);
-        }
+        // New in-memory database: create the tables and load the demo data.
+        await prepareDatabase();
         return;
       }
     }
@@ -123,9 +112,6 @@ async function ensureStartingNotifications(): Promise<void> {
 }
 
 async function startServer() {
-  await ensureDatabaseRunning();
-  await ensureStartingNotifications();
-
   const app = express();
 
   // Strict port resolution: Applet must run on port 3000
@@ -197,9 +183,22 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[Smart Academic Advisor] Server running at http://0.0.0.0:${PORT}`);
+  // Open the port first: hosts such as Render stop a deploy whose port does not open
+  // in time. The database is prepared right after; until then (and if it cannot be
+  // used) the app answers from its in-memory demo data.
+  await new Promise<void>(resolve => {
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`[Smart Academic Advisor] Server running at http://0.0.0.0:${PORT}`);
+      resolve();
+    });
   });
+
+  try {
+    await ensureDatabaseRunning();
+    await ensureStartingNotifications();
+  } catch (err) {
+    console.warn('[Database] Preparation failed; the app keeps running on its in-memory demo data.', err);
+  }
 }
 
 startServer().catch((err) => {
