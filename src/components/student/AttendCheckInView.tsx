@@ -11,11 +11,11 @@ import { roleHome } from '../common/navigation.js';
 
 /**
  * Opened when a student scans a lecture's QR code with the phone camera
- * (…/attend/<session>/<token>). Signs them in first if needed, then checks
- * them in straight away and shows the result.
+ * (…/a/<token>, or …/attend/<session>/<token> from older codes). Signs them in
+ * first if needed, then checks them in straight away and shows the result.
  */
 export const AttendCheckInView: React.FC = () => {
-  const { sessionId = '', token = '' } = useParams();
+  const { sessionId, token = '' } = useParams();
   const { currentUser } = useAuth();
   const { t, language } = useLanguage();
   const navigate = useNavigate();
@@ -29,7 +29,7 @@ export const AttendCheckInView: React.FC = () => {
     if (!isStudent || started.current) return;
     started.current = true;
     api
-      .checkInAttendance({ sessionId, token })
+      .checkInAttendance(sessionId ? { sessionId, token } : { token: token.toUpperCase() })
       .then(setResult)
       .catch(err => {
         setError({

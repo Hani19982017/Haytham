@@ -128,11 +128,16 @@ export class AttendanceEngine {
     return String(parseInt(hmac(secret, `code:${window}`).slice(0, 8), 16) % 1_000_000).padStart(6, '0');
   }
 
-  /** A token or code is valid in its own window and the one after it (up to a minute), so a scan right before it changes still counts. */
+  /**
+   * A QR token stays valid in its own window and the two after it (60–90
+   * seconds), so a student who scans just before it changes, or who has to sign
+   * in on the phone first, still gets in. The typed code (below) is used on the
+   * spot and stays valid for one more window only.
+   */
   public static verifyToken(secret: string, token: string, now = Date.now()): boolean {
     const w = this.window(now);
     const given = String(token || '').trim().toUpperCase();
-    return [w, w - 1].some(x => sameText(this.token(secret, x), given));
+    return [w, w - 1, w - 2].some(x => sameText(this.token(secret, x), given));
   }
 
   public static verifyCode(secret: string, code: string, now = Date.now()): boolean {

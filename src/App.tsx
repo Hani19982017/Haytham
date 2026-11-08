@@ -42,7 +42,7 @@ const getTabFromPath = (pathname: string): string => {
   if (p === 'student/gpa-plan') return 'student-gpa-plan';
   if (p === 'student/registration') return 'student-registration';
   if (p === 'student/training') return 'student-training';
-  if (p === 'student/attendance' || p.startsWith('attend/')) return 'student-attendance';
+  if (p === 'student/attendance' || p.startsWith('attend/') || /^a\//i.test(p)) return 'student-attendance';
 
   if (p === 'advisor' || p === 'advisor/dashboard') return 'advisor-dashboard';
   if (p === 'advisor/plans') return 'advisor-plans';
@@ -172,6 +172,7 @@ const DashboardLayout: React.FC = () => {
             <Route path="/student/training" element={<SummerTrainingView />} />
             <Route path="/student/attendance" element={<StudentAttendanceView />} />
             {/* Opened by scanning a lecture's QR code with the phone camera */}
+            <Route path="/a/:token" element={<AttendCheckInView />} />
             <Route path="/attend/:sessionId/:token" element={<AttendCheckInView />} />
 
             {/* Advisor Protected Routes */}

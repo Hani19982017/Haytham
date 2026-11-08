@@ -9,10 +9,12 @@ import { ScanLine, Camera, CameraOff, KeyRound, CheckCircle2, AlertCircle, Image
 /** What a scanned QR code (or typed code) asks the server to check. */
 export type CheckInInput = { sessionId?: string; token?: string; code?: string };
 
-/** Read a lecture QR code: the link …/attend/<session>/<token>, or a bare 6-digit code. */
+/** Read a lecture QR code: the link …/a/<token> (older codes: …/attend/<session>/<token>), or a bare 6-digit code. */
 export function parseCheckIn(text: string): CheckInInput | null {
-  const link = /\/attend\/([^/?#\s]+)\/([A-Za-z0-9]+)/.exec(text);
-  if (link) return { sessionId: decodeURIComponent(link[1]), token: link[2] };
+  const short = /\/a\/([A-Za-z0-9]{8,32})(?=$|[/?#\s])/i.exec(text.trim());
+  if (short) return { token: short[1].toUpperCase() };
+  const link = /\/attend\/([^/?#\s]+)\/([A-Za-z0-9]+)/i.exec(text);
+  if (link) return { sessionId: decodeURIComponent(link[1]), token: link[2].toUpperCase() };
   const digits = /^\s*(\d{6})\s*$/.exec(text);
   if (digits) return { code: digits[1] };
   return null;
@@ -24,19 +26,61 @@ export function checkInError(err: any, language: string, fallbackAr: string, fal
   return (language === 'ar' ? data?.messageAr : data?.messageEn) || (language === 'ar' ? fallbackAr : fallbackEn);
 }
 
-/** Decode a QR code from image pixels (camera frame or photo), downscaled for speed. */
-function decodeFrom(source: CanvasImageSource, width: number, height: number, canvas: HTMLCanvasElement): string | null {
+/**
+ * Decode a QR code with jsQR from part of an image (a camera frame or a photo).
+ * `crop` is the share of the shorter side taken from the centre (the aiming
+ * square); 1 means the whole picture. The region is read at up to `maxSide`
+ * pixels, so a code that fills the square keeps its full detail.
+ */
+function decodeRegion(source: CanvasImageSource, width: number, height: number, canvas: HTMLCanvasElement, crop: number, maxSide: number): string | null {
   if (!width || !height) return null;
-  const scale = Math.min(1, 720 / Math.max(width, height));
-  const w = Math.round(width * scale);
-  const h = Math.round(height * scale);
+  const side = crop >= 1 ? 0 : Math.round(Math.min(width, height) * crop);
+  const sw = crop >= 1 ? width : side;
+  const sh = crop >= 1 ? height : side;
+  const sx = Math.round((width - sw) / 2);
+  const sy = Math.round((height - sh) / 2);
+  const scale = Math.min(1, maxSide / Math.max(sw, sh));
+  const w = Math.max(1, Math.round(sw * scale));
+  const h = Math.max(1, Math.round(sh * scale));
   canvas.width = w;
   canvas.height = h;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return null;
-  ctx.drawImage(source, 0, 0, w, h);
+  ctx.drawImage(source, sx, sy, sw, sh, 0, 0, w, h);
   const img = ctx.getImageData(0, 0, w, h);
   return jsQR(img.data, w, h, { inversionAttempts: 'attemptBoth' })?.data || null;
+}
+
+/** The phone's own QR reader (Chrome on Android and others), much stronger than jsQR; null where the browser has none. */
+async function nativeQrDetector(): Promise<{ detect: (source: CanvasImageSource) => Promise<{ rawValue: string }[]> } | null> {
+  const Detector = (window as any).BarcodeDetector;
+  if (!Detector) return null;
+  try {
+    const formats: string[] = (await Detector.getSupportedFormats?.()) || [];
+    if (formats.length && !formats.includes('qr_code')) return null;
+    return new Detector({ formats: ['qr_code'] });
+  } catch {
+    return null;
+  }
+}
+
+/** Read the first attendance code found in a picture: the phone's reader first, then jsQR on the centre and on the whole picture. */
+async function readPicture(source: CanvasImageSource, width: number, height: number, canvas: HTMLCanvasElement): Promise<string | null> {
+  const native = await nativeQrDetector();
+  if (native) {
+    try {
+      const found = (await native.detect(source)).map(c => c.rawValue).find(v => parseCheckIn(v));
+      if (found) return found;
+    } catch {
+      // fall back to jsQR
+    }
+  }
+  return (
+    decodeRegion(source, width, height, canvas, 1, 1000) ||
+    decodeRegion(source, width, height, canvas, 0.75, 600) ||
+    decodeRegion(source, width, height, canvas, 0.5, 500) ||
+    decodeRegion(source, width, height, canvas, 1, 1600)
+  );
 }
 
 interface QrScannerModalProps {
@@ -107,8 +151,16 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({ onClose, onCheck
     }
     setCamera('starting');
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+      // Ask for HD: browsers otherwise give 640×480, too few pixels to read a code on a screen across a room.
+      const stream = await navigator.mediaDevices
+        .getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false })
+        .catch(() => navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false }));
       streamRef.current = stream;
+      const track = stream.getVideoTracks()[0];
+      const caps: any = track?.getCapabilities?.() || {};
+      if (Array.isArray(caps.focusMode) && caps.focusMode.includes('continuous')) {
+        await track.applyConstraints({ advanced: [{ focusMode: 'continuous' } as any] }).catch(() => undefined);
+      }
       const video = videoRef.current;
       if (video) {
         video.srcObject = stream;
@@ -125,30 +177,54 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({ onClose, onCheck
     return stopCamera;
   }, [startCamera, stopCamera]);
 
+  // Read a few frames a second: the phone's own reader when the browser has one,
+  // otherwise jsQR, taking in turn the whole frame and the aiming square, each
+  // shrunk to the size jsQR reads best (measured on simulated phone frames of a
+  // laptop screen: about 720 px for the frame, 400 px for the square).
   useEffect(() => {
     if (camera !== 'on') return;
-    let raf = 0;
-    let last = 0;
-    const tick = (now: number) => {
-      raf = requestAnimationFrame(tick);
-      if (now - last < 220 || busyRef.current) return;
-      last = now;
+    let stopped = false;
+    let timer = 0;
+    let frame = 0;
+    let native: Awaited<ReturnType<typeof nativeQrDetector>> = null;
+    const tick = async () => {
+      if (stopped) return;
       const video = videoRef.current;
       const canvas = canvasRef.current;
-      if (!video || !canvas || video.readyState < 2) return;
-      const text = decodeFrom(video, video.videoWidth, video.videoHeight, canvas);
-      if (text && parseCheckIn(text)) handleText(text);
+      if (video && canvas && video.readyState >= 2 && !busyRef.current) {
+        let text: string | null = null;
+        if (native) {
+          try {
+            text = (await native.detect(video)).map(c => c.rawValue).find(v => parseCheckIn(v)) || null;
+          } catch {
+            native = null;
+          }
+        }
+        if (!text && !native) {
+          frame += 1;
+          const [crop, size] = ([[1, 720], [0.75, 405], [1, 720], [0.5, 400]] as const)[frame % 4];
+          text = decodeRegion(video, video.videoWidth, video.videoHeight, canvas, crop, size);
+        }
+        if (text && parseCheckIn(text)) handleText(text);
+      }
+      if (!stopped) timer = window.setTimeout(tick, native ? 120 : 160);
     };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    nativeQrDetector().then(detector => {
+      native = detector;
+      if (!stopped) tick();
+    });
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+    };
   }, [camera, handleText]);
 
   const handlePhoto = (file?: File | null) => {
     if (!file) return;
     const url = URL.createObjectURL(file);
     const img = new Image();
-    img.onload = () => {
-      const text = canvasRef.current ? decodeFrom(img, img.naturalWidth, img.naturalHeight, canvasRef.current) : null;
+    img.onload = async () => {
+      const text = canvasRef.current ? await readPicture(img, img.naturalWidth, img.naturalHeight, canvasRef.current) : null;
       URL.revokeObjectURL(url);
       if (text) handleText(text);
       else setError(t('لم نجد رمز QR واضحاً في الصورة. قرّب الهاتف من الشاشة وأعد التصوير، أو اكتب الكود.', 'No clear QR code in that photo. Move closer to the screen and try again, or type the code.'));
@@ -200,8 +276,13 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({ onClose, onCheck
             <video ref={videoRef} className={cn('h-full w-full object-cover', camera !== 'on' && 'invisible')} muted playsInline aria-label={t('صورة الكاميرا', 'Camera view')} />
             {camera === 'on' && (
               <div className="pointer-events-none absolute inset-0 grid place-items-center" aria-hidden="true">
-                <div className="h-[62%] w-[62%] rounded-2xl border-[3px] border-route-400 shadow-[0_0_0_9999px_rgb(0_0_0/0.35)]" />
+                <div className="aspect-square h-[72%] rounded-2xl border-[3px] border-route-400 shadow-[0_0_0_9999px_rgb(0_0_0/0.35)]" />
               </div>
+            )}
+            {camera === 'on' && (
+              <p className="pointer-events-none absolute inset-x-0 bottom-2 text-center text-[12px] font-semibold text-white drop-shadow">
+                {t('قرّب الهاتف حتى يملأ الرمز المربع، وثبّته لحظة', 'Move closer until the code fills the square, then hold still')}
+              </p>
             )}
             {camera !== 'on' && (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center text-white">

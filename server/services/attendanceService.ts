@@ -318,16 +318,36 @@ export class AttendanceService {
     const isOpen = session.status === 'OPEN';
     const window = AttendanceEngine.window(now);
     const token = isOpen ? AttendanceEngine.token(session.secret, window) : '';
-    const checkInUrl = isOpen ? `${publicBaseUrl(req).url}/attend/${session.id}/${token}` : '';
+    const { checkInUrl, qrText } = isOpen ? this.checkInLink(publicBaseUrl(req).url, token) : { checkInUrl: '', qrText: '' };
     return {
       ...this.summary(session, offering, courseNameAr, courseNameEn, roster.length),
       token,
       code: isOpen ? AttendanceEngine.code(session.secret, window) : '',
       checkInUrl,
-      qrSvg: isOpen ? await QRCode.toString(checkInUrl, { type: 'svg', errorCorrectionLevel: 'M', margin: 1 }) : '',
+      // Full quiet zone (4 modules) and Q error correction, so phone cameras read it off a screen or projector.
+      qrSvg: isOpen ? await QRCode.toString(qrText, { type: 'svg', errorCorrectionLevel: 'Q', margin: 4, color: { dark: '#000000', light: '#ffffff' } }) : '',
       rotatesInMs: AttendanceEngine.rotatesInMs(now),
       roster: this.rosterEntries(roster, sessions, planned, session),
     };
+  }
+
+  /**
+   * The link a student's phone opens: <site>/a/<token>. Kept short, and written
+   * in capitals inside the QR code (web addresses ignore the case of the site
+   * name; the token is already capitals), so the code uses the compact
+   * alphanumeric QR mode: 29×29 modules instead of 37×37, easier to read from a
+   * distance and on a phone screen.
+   */
+  private static checkInLink(baseUrl: string, token: string): { checkInUrl: string; qrText: string } {
+    const checkInUrl = `${baseUrl}/a/${token}`;
+    let qrText = checkInUrl;
+    try {
+      const url = new URL(baseUrl);
+      if (url.pathname === '/' || url.pathname === '') qrText = `${url.origin.toUpperCase()}/A/${token}`;
+    } catch {
+      // keep the link as it is
+    }
+    return { checkInUrl, qrText };
   }
 
   /** Mark a student by hand (present, late, absent or excused), during or after the session. */
@@ -477,7 +497,18 @@ export class AttendanceService {
 
     let session: { id: string; offeringId: string; status: string; secret: string; startedAt: Date } | null = null;
     let method: AttendanceMethod = 'QR';
-    if (input.sessionId) {
+    if (!input.sessionId && input.token) {
+      // Short link (<site>/a/<token>): the token tells which open session it belongs to.
+      const open = await prisma.attendanceSession.findMany({ where: { status: 'OPEN' } });
+      session = open.find(s => AttendanceEngine.verifyToken(s.secret, String(input.token))) || null;
+      if (!session) {
+        throw new AttendanceError(
+          410,
+          'انتهت صلاحية رمز QR أو انتهى تسجيل الحضور. امسح الرمز المعروض الآن على الشاشة.',
+          'This QR code has expired or attendance has closed. Scan the one on the screen now.'
+        );
+      }
+    } else if (input.sessionId) {
       session = await prisma.attendanceSession.findUnique({ where: { id: String(input.sessionId) } });
       if (!session) throw new AttendanceError(404, 'رمز الحضور غير صحيح.', 'This attendance code is not valid.');
       if (session.status !== 'OPEN') throw new AttendanceError(409, 'انتهى تسجيل الحضور لهذه المحاضرة.', 'Attendance for this session has closed.');

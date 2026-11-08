@@ -507,12 +507,12 @@ const LiveSession: React.FC<{
             {open ? (
               <>
                 <div
-                  className="aspect-square w-full max-w-[420px] rounded-2xl border-[6px] border-ink-950 bg-white p-2 [&>svg]:h-full [&>svg]:w-full"
+                  className="aspect-square w-full max-w-[min(460px,52vh)] rounded-2xl border border-ink-200 bg-white shadow-sm [:fullscreen_&]:max-w-[78vh] [&>svg]:block [&>svg]:h-full [&>svg]:w-full"
                   role="img"
                   aria-label={t('رمز QR لتسجيل الحضور', 'Attendance QR code')}
                   dangerouslySetInnerHTML={{ __html: live.qrSvg }}
                 />
-                <div className="w-full max-w-[420px]">
+                <div className="w-full max-w-[min(460px,52vh)] [:fullscreen_&]:max-w-[78vh]">
                   <div className="h-1.5 overflow-hidden rounded-full bg-ink-100" aria-hidden="true">
                     <div className="h-full rounded-full bg-route-400 transition-[width] duration-200" style={{ width: `${(leftMs / 30000) * 100}%` }} />
                   </div>
@@ -520,7 +520,7 @@ const LiveSession: React.FC<{
                 </div>
                 <div className="text-center">
                   <p className="text-[12.5px] font-semibold text-ink-600">{t('أو اكتب الكود في صفحة «الحضور»', 'Or type the code on the Attendance page')}</p>
-                  <p className="t-num text-[44px] font-extrabold leading-tight tracking-[0.25em] text-ink-950" dir="ltr">
+                  <p className="t-num text-[44px] font-extrabold leading-tight tracking-[0.25em] text-ink-950 [:fullscreen_&]:text-[64px]" dir="ltr">
                     {live.code.slice(0, 3)} {live.code.slice(3)}
                   </p>
                 </div>
