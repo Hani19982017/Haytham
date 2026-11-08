@@ -1,4 +1,5 @@
 import { Course, CourseOffering, CourseRecommendation, Student } from '../../src/types/index.js';
+import { AcademicRulesEngine } from './rulesEngine.js';
 
 export class RecommendationEngine {
   /**
@@ -45,9 +46,12 @@ export class RecommendationEngine {
     const recommendations: CourseRecommendation[] = [];
 
     for (const course of allCourses) {
-      // 1. If already passed with grade higher than D, skip (cannot retake)
+      // Already studying it this term
+      if (AcademicRulesEngine.isTakingNow(student, course.code)) continue;
+
+      // 1. If already passed with grade higher than D+, skip (cannot retake)
       const passedRecord = student.records.find(r => r.courseCode === course.code && r.status === 'PASSED');
-      if (passedRecord && passedRecord.grade && !['D', 'D-'].includes(passedRecord.grade)) {
+      if (passedRecord && !AcademicRulesEngine.canRetakePassedGrade(passedRecord.grade)) {
         continue;
       }
 

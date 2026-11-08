@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.js';
 import { useLanguage } from '../../context/LanguageContext.js';
 import { api } from '../../services/api.js';
-import { GpaImprovementPlan, Student } from '../../types/index.js';
+import { GpaImprovementPlan, RegistrationRequest, Student } from '../../types/index.js';
 import {
   PageHeader,
   Panel,
@@ -20,6 +20,7 @@ import {
   toneColor,
   toneText,
   gradeTone,
+  isNewStudent,
   type Tone,
 } from '../ui/index.js';
 import {
@@ -34,6 +35,9 @@ import {
   RotateCcw,
   AlertTriangle,
   Flag,
+  Hourglass,
+  Sparkles,
+  Info,
 } from 'lucide-react';
 
 interface GpaImprovementViewProps {
@@ -64,9 +68,16 @@ export const GpaImprovementView: React.FC<GpaImprovementViewProps> = ({ onNaviga
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
-  const [adoptedStrategy, setAdoptedStrategy] = useState<string | null>(null);
+  const [request, setRequest] = useState<RegistrationRequest | null>(null);
+  const [adopting, setAdopting] = useState<string | null>(null);
+  const [adoptResult, setAdoptResult] = useState<{ added: string[]; missing: string[]; alreadyRegistered: string[] } | null>(null);
   const [activeModalPlan, setActiveModalPlan] = useState<GpaImprovementPlan | null>(null);
   const [successToast, setSuccessToast] = useState<string | null>(null);
+  const [errorToast, setErrorToast] = useState<string | null>(null);
+
+  // The adopted route lives with the term's registration request on the server.
+  const adoptedStrategy = request?.recoveryStrategy || null;
+  const locked = request?.status === 'PENDING' || request?.status === 'APPROVED';
 
   const studentId = currentUser?.studentId || currentUser?.id || 'stu_omar';
 
@@ -75,20 +86,14 @@ export const GpaImprovementView: React.FC<GpaImprovementViewProps> = ({ onNaviga
       try {
         setLoading(true);
         setLoadFailed(false);
-        const [plansData, studentData] = await Promise.all([
+        const [plansData, studentData, requestData] = await Promise.all([
           api.getGpaPlans(studentId),
           api.getStudentById(studentId),
+          api.getRegistrationRequest(studentId).catch(() => null),
         ]);
         setPlans(plansData);
         setStudent(studentData);
-
-        // Check for previously adopted plan
-        try {
-          const saved = localStorage.getItem(`gpa_adopted_strategy_${studentId}`);
-          if (saved) {
-            setAdoptedStrategy(saved);
-          }
-        } catch {}
+        setRequest(requestData);
       } catch (err) {
         console.error('Failed to load GPA plans:', err);
         setLoadFailed(true);
@@ -99,29 +104,45 @@ export const GpaImprovementView: React.FC<GpaImprovementViewProps> = ({ onNaviga
     loadData();
   }, [studentId, reloadKey]);
 
-  // The confirmation toast clears itself after 4 seconds.
+  // Toasts clear themselves.
   useEffect(() => {
     if (!successToast) return;
     const timer = setTimeout(() => setSuccessToast(null), 4000);
     return () => clearTimeout(timer);
   }, [successToast]);
+  useEffect(() => {
+    if (!errorToast) return;
+    const timer = setTimeout(() => setErrorToast(null), 7000);
+    return () => clearTimeout(timer);
+  }, [errorToast]);
 
-  const handleApplyPlan = (plan: GpaImprovementPlan) => {
-    setAdoptedStrategy(plan.strategy);
+  // Adopting a route saves it on the server and puts its courses (with a section
+  // for each) into this term's timetable, ready to send to the advisor.
+  const handleApplyPlan = async (plan: GpaImprovementPlan) => {
+    if (adoptedStrategy === plan.strategy) {
+      setAdoptResult(null);
+      setActiveModalPlan(plan);
+      return;
+    }
+    if (locked) return;
     try {
-      localStorage.setItem(`gpa_adopted_strategy_${studentId}`, plan.strategy);
-      // Stage course codes for automatic preselection in registration
-      const stagedCodes = plan.courses.map(c => c.courseCode);
-      localStorage.setItem(`staged_recovery_courses_${studentId}`, JSON.stringify(stagedCodes));
-      localStorage.setItem('staged_recovery_courses', JSON.stringify(stagedCodes));
-    } catch {}
-
-    setActiveModalPlan(plan);
-    setSuccessToast(
-      language === 'ar'
-        ? `اعتمدت «${plan.titleAr}». أُضيفت مقرراتها إلى مسودة تسجيلك.`
-        : `You adopted “${plan.titleEn}”. Its courses were added to your registration draft.`
-    );
+      setAdopting(plan.strategy);
+      const res = await api.adoptRecoveryPlan(studentId, plan.strategy);
+      setRequest(res.request);
+      setAdoptResult({ added: res.added, missing: res.missing, alreadyRegistered: res.alreadyRegistered });
+      setActiveModalPlan(plan);
+      setSuccessToast(
+        language === 'ar'
+          ? `اعتمدت «${plan.titleAr}»، وأُضيفت مقرراتها إلى جدولك في صفحة التسجيل.`
+          : `You adopted “${plan.titleEn}”; its courses were added to your timetable on the Registration page.`
+      );
+    } catch (err: any) {
+      const data = err?.response?.data;
+      if (data?.request) setRequest(data.request);
+      setErrorToast((language === 'ar' ? data?.messageAr : data?.messageEn) || t('تعذّر اعتماد الخطة. حاول مرة أخرى.', 'The plan could not be adopted. Please try again.'));
+    } finally {
+      setAdopting(null);
+    }
   };
 
   const handleNavigate = (tab: string, path: string) => {
@@ -155,11 +176,12 @@ export const GpaImprovementView: React.FC<GpaImprovementViewProps> = ({ onNaviga
     );
   }
 
+  const newStudent = isNewStudent(student);
   const deficitPoints = student
     ? Math.max(0, Math.round((2.0 * student.completedCredits - student.cumulativeGpa * student.completedCredits) * 100) / 100)
     : 0;
   const currentGpa = student?.cumulativeGpa ?? 0;
-  const atRisk = currentGpa < 2.0;
+  const atRisk = !newStudent && currentGpa < 2.0;
   const Chevron = language === 'ar' ? ChevronLeft : ChevronRight;
 
   const strategyName = (s: string) => {
@@ -173,8 +195,8 @@ export const GpaImprovementView: React.FC<GpaImprovementViewProps> = ({ onNaviga
       path: '/student/registration',
       icon: CalendarCheck,
       primary: true,
-      title: t('اذهب إلى التسجيل', 'Go to registration'),
-      why: t('مقررات الخطة جاهزة في مسودة جدولك؛ راجعها وأرسلها لمرشدك.', 'The plan’s courses are waiting in your timetable draft; review and send it to your advisor.'),
+      title: t('اذهب إلى جدولك في التسجيل', 'Go to your timetable'),
+      why: t('مقررات الخطة في جدولك ومعلَّمة بـ«خطة التحسين»؛ راجعها وأرسل الجدول لمرشدك ليعتمده ويسجلها.', 'The plan’s courses are in your timetable, marked “Recovery plan”; review it and send it to your advisor to approve and register.'),
     },
     {
       tab: 'student-study-plan',
@@ -199,6 +221,11 @@ export const GpaImprovementView: React.FC<GpaImprovementViewProps> = ({ onNaviga
           {successToast}
         </Toast>
       )}
+      {errorToast && (
+        <Toast tone="signal" onClose={() => setErrorToast(null)} closeLabel={t('إغلاق', 'Close')}>
+          {errorToast}
+        </Toast>
+      )}
 
       <PageHeader
         icon={TrendingUp}
@@ -209,10 +236,25 @@ export const GpaImprovementView: React.FC<GpaImprovementViewProps> = ({ onNaviga
           'Three routes to lift your GPA above 2.00, all within the retake grade caps. Adopt one and its courses go into your registration draft.'
         )}
         meta={
-          adoptedStrategy ? (
-            <Chip tone="sign" icon={CheckCircle2}>
-              {t(`الخطة الحالية: ${strategyName(adoptedStrategy)}`, `Current plan: ${strategyName(adoptedStrategy)}`)}
+          newStudent ? (
+            <Chip tone="sign" icon={Sparkles}>
+              {t('طالب مستجد: لا معدل بعد', 'New student: no GPA yet')}
             </Chip>
+          ) : adoptedStrategy ? (
+            <>
+              <Chip tone="sign" icon={CheckCircle2}>
+                {t(`الخطة المعتمدة: ${strategyName(adoptedStrategy)}`, `Adopted plan: ${strategyName(adoptedStrategy)}`)}
+              </Chip>
+              <Chip tone={request?.status === 'APPROVED' ? 'sign' : request?.status === 'PENDING' ? 'lane' : request?.status === 'CHANGES_REQUESTED' ? 'caution' : 'ink'}>
+                {request?.status === 'APPROVED'
+                  ? t('اعتمدها المرشد وسُجلت مقرراتها', 'Approved by your advisor; courses registered')
+                  : request?.status === 'PENDING'
+                  ? t('في جدولك المرسل للمرشد', 'In the timetable sent to your advisor')
+                  : request?.status === 'CHANGES_REQUESTED'
+                  ? t('المرشد طلب تعديل الجدول', 'Your advisor asked for changes')
+                  : t('مقرراتها في مسودة جدولك', 'Its courses are in your timetable draft')}
+              </Chip>
+            </>
           ) : (
             <Chip tone="ink">{t('لم تعتمد خطة بعد', 'No plan adopted yet')}</Chip>
           )
@@ -224,6 +266,37 @@ export const GpaImprovementView: React.FC<GpaImprovementViewProps> = ({ onNaviga
           </button>
         }
       />
+
+      {newStudent ? (
+        <Panel>
+          <EmptyState
+            icon={Sparkles}
+            tone="sign"
+            title={t('أنت في فصلك الأول، فلا يوجد معدل تراكمي لتحسينه بعد', 'This is your first term, so there is no GPA to recover yet')}
+            description={t(
+              'يُحسب معدلك بعد ظهور نتائج هذا الفصل. إن احتجت يوماً إلى رفعه ستجد هنا خطط إعادة المقررات المناسبة لك. ابدأ الآن بتسجيل مقررات فصلك الأول.',
+              'Your GPA is worked out once this term’s results are in. If you ever need to raise it, recovery plans will show here. For now, register your first-term courses.'
+            )}
+            action={
+              <button type="button" className="btn btn-primary" onClick={() => handleNavigate('student-registration', '/student/registration')}>
+                <CalendarCheck aria-hidden="true" />
+                {t('اذهب إلى التسجيل', 'Go to registration')}
+              </button>
+            }
+          />
+        </Panel>
+      ) : (
+      <>
+      {locked && (
+        <div className="callout callout-lane" role="note">
+          {request?.status === 'APPROVED' ? <CheckCircle2 aria-hidden="true" /> : <Hourglass aria-hidden="true" />}
+          <p className="font-semibold text-lane-800">
+            {request?.status === 'APPROVED'
+              ? t('جدول هذا الفصل معتمد ومسجل، لذلك لا يمكن تغيير الخطة الآن. يمكنك اعتماد خطة أخرى في الفصل القادم.', 'This term’s timetable is approved and registered, so the plan cannot change now. You can adopt another one next term.')
+              : t('جدولك عند المرشد الآن؛ لا يمكن تغيير الخطة حتى يصدر قراره.', 'Your timetable is with your advisor; the plan cannot change until they decide.')}
+          </p>
+        </div>
+      )}
 
       {/* ── Where you stand ─────────────────────────────────────────────── */}
       <Panel padded={false} className="overflow-hidden">
@@ -420,10 +493,17 @@ export const GpaImprovementView: React.FC<GpaImprovementViewProps> = ({ onNaviga
                     <button
                       type="button"
                       onClick={() => handleApplyPlan(plan)}
+                      disabled={!!adopting || (locked && !isAdopted)}
                       className={cn('btn btn-block', isAdopted ? 'btn-soft' : isRecommended ? 'btn-primary' : 'btn-secondary')}
                     >
                       {isAdopted ? <CheckCircle2 aria-hidden="true" /> : <Flag aria-hidden="true" />}
-                      {isAdopted ? t('عرض خطوات هذه الخطة', 'Show this plan’s next steps') : t('اعتمد هذا المسار', 'Adopt this route')}
+                      {adopting === plan.strategy
+                        ? t('جارٍ الاعتماد وإضافة المقررات…', 'Adopting and adding the courses…')
+                        : isAdopted
+                        ? t('عرض خطوات هذه الخطة', 'Show this plan’s next steps')
+                        : adoptedStrategy
+                        ? t('بدّل إلى هذا المسار', 'Switch to this route')
+                        : t('اعتمد هذا المسار', 'Adopt this route')}
                     </button>
                   </div>
                 </div>
@@ -431,6 +511,9 @@ export const GpaImprovementView: React.FC<GpaImprovementViewProps> = ({ onNaviga
             );
           })}
         </div>
+      )}
+
+      </>
       )}
 
       {/* ── Adoption dialog ─────────────────────────────────────────────── */}
@@ -467,9 +550,35 @@ export const GpaImprovementView: React.FC<GpaImprovementViewProps> = ({ onNaviga
             </div>
           </dl>
 
+          {adoptResult && (adoptResult.alreadyRegistered.length > 0 || adoptResult.missing.length > 0) && (
+            <div className="callout callout-lane mt-5 !items-start" role="note">
+              <Info aria-hidden="true" />
+              <div className="space-y-1 text-[12.5px]">
+                {adoptResult.added.length > 0 && (
+                  <p>
+                    {t(`أُضيفت إلى جدولك: ${adoptResult.added.join('، ')}.`, `Added to your timetable: ${adoptResult.added.join(', ')}.`)}
+                  </p>
+                )}
+                {adoptResult.alreadyRegistered.length > 0 && (
+                  <p>
+                    {t(`مسجل فيها بالفعل هذا الفصل: ${adoptResult.alreadyRegistered.join('، ')}.`, `Already registered this term: ${adoptResult.alreadyRegistered.join(', ')}.`)}
+                  </p>
+                )}
+                {adoptResult.missing.length > 0 && (
+                  <p>
+                    {t(
+                      `غير مطروحة هذا الفصل: ${adoptResult.missing.join('، ')} — تبقى في خطتك للفصل القادم.`,
+                      `Not offered this term: ${adoptResult.missing.join(', ')} — they stay in your plan for next term.`
+                    )}
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
           {activeModalPlan.courses.length > 0 && (
             <div className="mt-5">
-              <p className="mb-2 text-[13px] font-bold text-ink-900">{t('المقررات التي أُضيفت إلى مسودة تسجيلك', 'Courses added to your registration draft')}</p>
+              <p className="mb-2 text-[13px] font-bold text-ink-900">{t('مقررات الخطة والتقدير المستهدف', 'The plan’s courses and target grades')}</p>
               <ul className="divide-y divide-ink-100 rounded-xl border border-ink-200">
                 {activeModalPlan.courses.map((c, idx) => (
                   <li key={`${c.courseCode}_${idx}`} className="flex items-center justify-between gap-3 px-3 py-2.5">

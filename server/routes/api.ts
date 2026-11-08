@@ -34,6 +34,8 @@ import { StudyPlanRepository } from '../repositories/studyPlanRepository.js';
 import { AcademicTransactionService } from '../services/academicTransactionService.js';
 import { RegistrationAdvisorEngine } from '../engines/registrationAdvisorEngine.js';
 import { INITIAL_STUDENTS } from '../data/store.js';
+import { createAttendanceRouter } from './attendance.js';
+import { RegistrationRequestRepository } from '../repositories/registrationRequestRepository.js';
 
 export const apiRouter = Router();
 
@@ -100,6 +102,22 @@ const USERS: Array<{
     nameAr: 'أ.د. طارق السعدني (رئيس قسم علوم الحاسب)',
     nameEn: 'Prof. Tariq El-Saadani (Department Head)',
     role: 'DEPARTMENT_HEAD',
+  },
+  {
+    id: 'user_freshman',
+    email: 'freshman@example.com',
+    nameAr: 'مازن خالد عبد الله (طالب مستجد)',
+    nameEn: 'Mazen Khaled (New Student)',
+    role: 'STUDENT',
+    studentId: 'stu_freshman',
+  },
+  {
+    id: 'user_ta',
+    email: 'ta@example.com',
+    nameAr: 'م. أحمد سمير (معيد)',
+    nameEn: 'Eng. Ahmed Samir (Teaching Assistant)',
+    role: 'TEACHING_ASSISTANT',
+    instructorId: 'inst_ta_ahmed',
   },
 ];
 
@@ -186,6 +204,9 @@ apiRouter.use((req: Request, res: Response, next) => {
   }
   next();
 });
+
+// QR / manual attendance (instructors, teaching assistants and students)
+apiRouter.use('/attendance', createAttendanceRouter(getCaller));
 
 // -------------------------------------------------------------
 // 1. AUTHENTICATION & IDENTITY (Enterprise Credentials + JWT)
@@ -1166,8 +1187,8 @@ apiRouter.get('/students/:id/degree-plan', async (req: Request, res: Response) =
 apiRouter.post('/students/:id/submit-proposed-schedule', async (req: Request, res: Response) => {
   const caller = getCaller(req);
   try {
-    const student = await StudentRepository.findById(req.params.id);
-    if (!student) return res.status(404).json({ error: 'Student not found' });
+    const student = await studentForCaller(req, res, true);
+    if (!student) return;
 
     const { offeringIds, courseCodes, notes } = req.body;
     const allCourses = await CourseRepository.getAll();
@@ -1197,8 +1218,19 @@ apiRouter.post('/students/:id/submit-proposed-schedule', async (req: Request, re
       });
     }
 
-    // Update student's status to Pending Review
-    student.currentPlanStatus = 'Pending Review';
+    const current = await RegistrationRequestRepository.current(student.id);
+    if (current?.status === 'PENDING') {
+      return res.status(409).json({ success: false, messageAr: 'جدولك عند المرشد بالفعل وينتظر قراره.', messageEn: 'Your schedule is already with your advisor.' });
+    }
+    if (current?.status === 'APPROVED') {
+      return res.status(409).json({ success: false, messageAr: 'تم اعتماد جدولك وتسجيل مقرراتك لهذا الفصل بالفعل.', messageEn: 'Your schedule for this term is already approved.' });
+    }
+    const request = await RegistrationRequestRepository.save(student.id, {
+      status: 'PENDING',
+      offeringIds: selectedOfferings.map(o => o.id),
+      studentNotes: typeof notes === 'string' ? notes : '',
+      submittedAt: new Date().toISOString(),
+    });
 
     // Log to Audit Log
     await addAuditLog(
@@ -1220,8 +1252,8 @@ apiRouter.post('/students/:id/submit-proposed-schedule', async (req: Request, re
       type: 'APPROVAL',
       titleAr: `طلب اعتماد جدول فصلي: ${plainName(student.nameAr)}`,
       titleEn: `Semester schedule to review: ${plainName(student.nameEn)}`,
-      messageAr: `جدول مقترح من ${plainName(student.nameAr)} (${student.studentCode}) يضم ${selectedOfferings.length} مقررات بانتظار مراجعتك واعتمادك.`,
-      messageEn: `${plainName(student.nameEn)} (${student.studentCode}) sent a proposed schedule with ${selectedOfferings.length} courses for your review.`,
+      messageAr: `جدول مقترح من ${plainName(student.nameAr)} (${student.studentCode}) يضم ${selectedOfferings.length} مقررات (${validation.totalCredits} ساعة)${request.recoveryTitleAr ? ` وفق خطة تحسين المعدل «${request.recoveryTitleAr}»` : ''}، بانتظار مراجعتك واعتمادك.`,
+      messageEn: `${plainName(student.nameEn)} (${student.studentCode}) sent a schedule with ${selectedOfferings.length} courses (${validation.totalCredits} credits)${request.recoveryTitleEn ? ` following the GPA recovery route “${request.recoveryTitleEn}”` : ''} for your review.`,
     });
 
     return res.json({
@@ -1229,7 +1261,8 @@ apiRouter.post('/students/:id/submit-proposed-schedule', async (req: Request, re
       messageAr: 'تم إرسال الجدول الدراسي المقترح إلى المرشد الأكاديمي بنجاح، وستصلك إفادة فور الاعتماد.',
       messageEn: 'Proposed semester schedule submitted to academic advisor for review.',
       validation,
-      status: 'Pending Review',
+      status: 'PENDING',
+      request,
     });
   } catch (err: any) {
     console.error('Error submitting proposed schedule:', err);
@@ -1237,97 +1270,327 @@ apiRouter.post('/students/:id/submit-proposed-schedule', async (req: Request, re
   }
 });
 
-// 7. Academic Advisor Reviews & Finalizes Schedule
-apiRouter.post('/advisors/approve-schedule', async (req: Request, res: Response) => {
+// 7. Semester registration requests: the student's schedule on its way to the advisor
+// -------------------------------------------------------------------------------------
+
+/** True when the two sections meet at overlapping times on a shared day. */
+const sectionsClash = (a: CourseOffering, b: CourseOffering) =>
+  (a.days || []).some(d => (b.days || []).includes(d)) &&
+  !!a.startTime && !!a.endTime && !!b.startTime && !!b.endTime &&
+  a.startTime < b.endTime && b.startTime < a.endTime;
+
+/**
+ * Pick one section per course with open seats, so that nothing clashes with the
+ * other picks or with the sections the student already sits in. Tries every
+ * combination (courses with fewest sections first, emptier sections first); if no
+ * clash-free set exists it falls back to the emptiest section of each course.
+ */
+function pickSections(codes: string[], offerings: CourseOffering[], alreadyTaken: CourseOffering[]) {
+  const optionsOf = (code: string) =>
+    offerings
+      .filter(o => o.courseCode === code && o.enrolledCount < o.capacity)
+      .sort((a, b) => a.enrolledCount / a.capacity - b.enrolledCount / b.capacity);
+  const missing = codes.filter(code => optionsOf(code).length === 0);
+  const order = codes.filter(code => !missing.includes(code)).sort((a, b) => optionsOf(a).length - optionsOf(b).length);
+
+  const search = (i: number, chosen: CourseOffering[]): CourseOffering[] | null => {
+    if (i === order.length) return chosen;
+    for (const o of optionsOf(order[i])) {
+      if ([...alreadyTaken, ...chosen].some(p => sectionsClash(p, o))) continue;
+      const found = search(i + 1, [...chosen, o]);
+      if (found) return found;
+    }
+    return null;
+  };
+  const picked = search(0, []) || order.map(code => optionsOf(code)[0]);
+  return { picked, missing };
+}
+
+/**
+ * The student the caller may act for. Students only for themselves; for changes
+ * (`write`), otherwise only the student's advisor or an administrator.
+ */
+async function studentForCaller(req: Request, res: Response, write = false): Promise<Student | null> {
+  const caller = getCaller(req);
+  if (!caller) {
+    res.status(401).json({ error: 'UNAUTHORIZED', messageAr: 'غير مصرح: يرجى تسجيل الدخول.', messageEn: 'Unauthorized: Authentication required.' });
+    return null;
+  }
+  const student = await StudentRepository.findById(req.params.id);
+  if (!student || (student.id !== req.params.id && student.studentCode !== req.params.id)) {
+    res.status(404).json({ error: 'Student not found', messageAr: 'الطالب غير موجود.', messageEn: 'Student not found.' });
+    return null;
+  }
+  if (caller.role === 'STUDENT' && caller.studentId !== student.id && caller.studentId !== student.studentCode) {
+    res.status(403).json({ error: 'FORBIDDEN', messageAr: 'يمكنك الاطلاع على تسجيلك فقط.', messageEn: 'You can only view your own registration.' });
+    return null;
+  }
+  if (
+    write &&
+    caller.role !== 'STUDENT' &&
+    caller.role !== 'ADMIN' &&
+    !(caller.role === 'ACADEMIC_ADVISOR' && caller.advisorId && caller.advisorId === student.advisorId)
+  ) {
+    res.status(403).json({ error: 'FORBIDDEN', messageAr: 'تعديل جدول الطالب للطالب نفسه أو لمرشده فقط.', messageEn: 'Only the student or their advisor can change this timetable.' });
+    return null;
+  }
+  return student;
+}
+
+// The student's registration request for this term (null if none yet).
+apiRouter.get('/students/:id/registration-request', async (req: Request, res: Response) => {
+  try {
+    const student = await studentForCaller(req, res);
+    if (!student) return;
+    return res.json({ request: await RegistrationRequestRepository.current(student.id) });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Save the draft selection (kept on the server, so it is there on any device).
+apiRouter.put('/students/:id/registration-request', async (req: Request, res: Response) => {
+  try {
+    const student = await studentForCaller(req, res, true);
+    if (!student) return;
+    const current = await RegistrationRequestRepository.current(student.id);
+    if (current?.status === 'PENDING' || current?.status === 'APPROVED') {
+      return res.status(409).json({
+        error: 'LOCKED',
+        messageAr: current.status === 'PENDING' ? 'جدولك عند المرشد الآن، ولا يمكن تعديله حتى يصدر قراره.' : 'تم اعتماد جدولك وتسجيل مقرراتك لهذا الفصل.',
+        messageEn: current.status === 'PENDING' ? 'Your schedule is with your advisor and cannot change until they decide.' : 'Your schedule for this term is already approved.',
+        request: current,
+      });
+    }
+    const offeringIds = Array.isArray(req.body?.offeringIds) ? req.body.offeringIds.map(String) : [];
+    const request = await RegistrationRequestRepository.save(student.id, {
+      offeringIds,
+      ...(req.body?.clearRecovery ? { recoveryStrategy: '', recoveryTitleAr: '', recoveryTitleEn: '' } : {}),
+    });
+    return res.json({ request });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Adopt a GPA recovery route: its courses go into this term's schedule (a section is picked for each).
+apiRouter.post('/students/:id/recovery-plan/adopt', async (req: Request, res: Response) => {
   const caller = getCaller(req);
   try {
-    const { studentId, decision, courseCodes, notes } = req.body;
-    if (!studentId || !decision) {
-      return res.status(400).json({ error: 'studentId and decision are required' });
+    const student = await studentForCaller(req, res, true);
+    if (!student) return;
+    const courses = await CourseRepository.listAll();
+    const plan = GpaImprovementPlanner.generatePlans(student, courses).find(p => p.strategy === req.body?.strategy);
+    if (!plan) {
+      return res.status(404).json({ error: 'PLAN_NOT_FOUND', messageAr: 'خطة تحسين المعدل غير موجودة.', messageEn: 'GPA recovery route not found.' });
+    }
+    const current = await RegistrationRequestRepository.current(student.id);
+    if (current?.status === 'PENDING' || current?.status === 'APPROVED') {
+      return res.status(409).json({
+        error: 'LOCKED',
+        messageAr: current.status === 'PENDING' ? 'جدولك عند المرشد الآن؛ انتظر قراره قبل تغيير الخطة.' : 'تم اعتماد جدولك لهذا الفصل بالفعل.',
+        messageEn: current.status === 'PENDING' ? 'Your schedule is with your advisor; wait for their decision.' : 'Your schedule for this term is already approved.',
+        request: current,
+      });
     }
 
-    const student = await StudentRepository.findById(studentId);
-    if (!student) return res.status(404).json({ error: 'Student not found' });
+    const offerings = await OfferingRepository.listAll();
+    const inProgress = new Set(student.records.filter(r => r.status === 'IN_PROGRESS').map(r => r.courseCode));
+    const takenNow = offerings.filter(o => student.records.some(r => r.status === 'IN_PROGRESS' && r.offeringId === o.id));
+    const planCodes = [...new Set(plan.courses.map(c => c.courseCode))].filter(code => !inProgress.has(code));
+    const { picked, missing } = pickSections(planCodes, offerings, takenNow);
 
-    if (decision === 'APPROVE') {
-      const regCodes = courseCodes || ['CS 201', 'CS 210', 'BS 110', 'CS 202'];
-      const result = await AcademicTransactionService.registerCourses(
-        studentId,
-        regCodes,
-        false,
-        caller || undefined
-      );
+    // Keep the sections already in the draft for other courses, within the credit limit and without clashes.
+    const credits = (o: CourseOffering) => courses.find(c => c.code === o.courseCode)?.credits ?? 3;
+    const maxCredits = AcademicRulesEngine.getMaxCredits(student);
+    const finalSections = [...picked];
+    let total = finalSections.reduce((sum, o) => sum + credits(o), 0);
+    for (const id of current?.offeringIds || []) {
+      const o = offerings.find(x => x.id === id);
+      if (!o || finalSections.some(p => p.courseCode === o.courseCode || sectionsClash(p, o))) continue;
+      if (total + credits(o) > maxCredits) continue;
+      finalSections.push(o);
+      total += credits(o);
+    }
 
-      if (!result.success) {
-        return res.status(422).json({
-          success: false,
-          messageAr: 'تعذر الاعتماد لوجود مخالفات باللائحة.',
-          messageEn: 'Could not approve due to academic bylaw violations.',
-          validation: result.validation,
-        });
-      }
+    const request = await RegistrationRequestRepository.save(student.id, {
+      offeringIds: finalSections.map(o => o.id),
+      recoveryStrategy: plan.strategy,
+      recoveryTitleAr: plan.titleAr,
+      recoveryTitleEn: plan.titleEn,
+    });
+    await addAuditLog(
+      caller?.id || student.id,
+      caller?.nameAr || student.nameAr,
+      (caller?.role as UserRole) || 'STUDENT',
+      'ADOPT_GPA_RECOVERY_PLAN',
+      'RegistrationRequest',
+      request.id,
+      `اعتماد خطة تحسين المعدل «${plan.titleAr}» وإضافة مقرراتها (${picked.map(o => o.courseCode).join(', ') || '—'}) إلى جدول الفصل.`,
+      `Adopted the GPA recovery route “${plan.titleEn}” and added its courses (${picked.map(o => o.courseCode).join(', ') || '—'}) to the term schedule.`
+    );
+    return res.json({ request, added: picked.map(o => o.courseCode), missing, alreadyRegistered: plan.courses.map(c => c.courseCode).filter(c => inProgress.has(c)) });
+  } catch (err: any) {
+    console.error('Error adopting GPA recovery plan:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
 
-      student.currentPlanStatus = 'Approved';
+/** Everything the advisor needs to decide on one request. */
+function reviewOf(request: any, student: Student, offerings: CourseOffering[], courses: Course[]) {
+  const selected = (request.offeringIds as string[]).map(id => offerings.find(o => o.id === id)).filter((o): o is CourseOffering => !!o);
+  const courseOf = (code: string) => courses.find(c => c.code === code);
+  return {
+    request,
+    student: {
+      id: student.id,
+      studentCode: student.studentCode,
+      nameAr: plainName(student.nameAr),
+      nameEn: plainName(student.nameEn),
+      level: student.level,
+      track: student.track,
+      cumulativeGpa: student.cumulativeGpa,
+      completedCredits: student.completedCredits,
+      warningCount: student.warningCount,
+      riskLevel: AcademicRiskEngine.evaluateRisk(student).level,
+      isNewStudent: AcademicRulesEngine.isNewStudent(student),
+      failedCourses: student.records.filter(r => r.status === 'FAILED').map(r => r.courseCode),
+      currentCourses: student.records.filter(r => r.status === 'IN_PROGRESS').map(r => r.courseCode),
+      planStatus: student.currentPlanStatus,
+    },
+    offerings: selected.map(o => ({
+      ...o,
+      courseNameAr: courseOf(o.courseCode)?.nameAr || o.courseCode,
+      courseNameEn: courseOf(o.courseCode)?.nameEn || o.courseCode,
+      credits: courseOf(o.courseCode)?.credits ?? 3,
+    })),
+    totalCredits: selected.reduce((sum, o) => sum + (courseOf(o.courseCode)?.credits ?? 3), 0),
+    maxAllowedCredits: AcademicRulesEngine.getMaxCredits(student),
+    validation: request.status === 'PENDING' ? RegistrationAdvisorEngine.validateProposedRegistration(student, selected, courses, offerings, false) : null,
+  };
+}
 
-      await addAuditLog(
-        caller?.id || 'adv_dr_mahmoud',
-        caller?.nameAr || 'د. محمود صقر',
-        'ACADEMIC_ADVISOR',
-        'ADVISOR_APPROVE_SCHEDULE',
-        'CourseRegistration',
-        studentId,
-        `اعتماد الجدول الدراسي الفصلي للطالب ${student.nameAr} وتثبيت تسجيل المقررات (${regCodes.join(', ')}). ملاحظات: ${notes || 'معتمد'}.`,
-        `Approved semester schedule for ${student.nameEn} and finalized registration for (${regCodes.join(', ')}). Notes: ${notes || 'Approved'}.`,
-        undefined,
-        { regCodes, notes }
-      );
+// Advisor: requests from my students (waiting first, then recent decisions).
+apiRouter.get('/advisor/registration-requests', async (req: Request, res: Response) => {
+  const caller = getCaller(req);
+  if (!caller || !['ACADEMIC_ADVISOR', 'ADMIN'].includes(caller.role)) {
+    return res.status(403).json({ error: 'ROLE_FORBIDDEN', messageAr: 'هذه الصفحة للمرشد الأكاديمي.', messageEn: 'This page is for academic advisors.' });
+  }
+  try {
+    const students = await StudentRepository.listAll();
+    const mine = caller.role === 'ADMIN' ? students : students.filter(s => s.advisorId === caller.advisorId);
+    const requests = await RegistrationRequestRepository.forStudents(
+      mine.map(s => s.id),
+      ['PENDING', 'APPROVED', 'CHANGES_REQUESTED']
+    );
+    const [offerings, courses] = await Promise.all([OfferingRepository.listAll(), CourseRepository.listAll()]);
+    const ordered = [...requests.filter(r => r.status === 'PENDING'), ...requests.filter(r => r.status !== 'PENDING').slice(0, 20)];
+    return res.json(ordered.map(r => reviewOf(r, mine.find(s => s.id === r.studentId)!, offerings, courses)));
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
 
-      await NotificationRepository.create({
-        recipientId: studentId,
-        type: 'REGISTRATION',
-        titleAr: 'تهانينا: تم اعتماد جدولك الدراسي رسمياً',
-        titleEn: 'Congratulations: Semester Schedule Officially Approved',
-        messageAr: `تمت مراجعة واعتماد جدولك الدراسي للفصل الحالي من قِبل المرشد الأكاديمي (${caller?.nameAr || 'د. محمود صقر'}). المقررات مسجلة رسمياً الآن.`,
-        messageEn: `Your semester schedule has been officially approved by your academic advisor. Courses are now officially registered.`,
-      });
+/** Approve (register the courses) or send back with the changes needed. */
+async function decideRegistration(caller: any, requestId: string, decision: string, notes: string, res: Response) {
+  const request = await RegistrationRequestRepository.findById(requestId);
+  if (!request) return res.status(404).json({ error: 'NOT_FOUND', messageAr: 'طلب التسجيل غير موجود.', messageEn: 'Registration request not found.' });
+  const student = await StudentRepository.findById(request.studentId);
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  if (caller.role === 'ACADEMIC_ADVISOR' && student.advisorId !== caller.advisorId) {
+    return res.status(403).json({ error: 'FORBIDDEN', messageAr: 'هذا الطالب ليس من طلابك.', messageEn: 'This student is not assigned to you.' });
+  }
+  if (request.status !== 'PENDING') {
+    return res.status(409).json({ error: 'ALREADY_DECIDED', messageAr: 'تم البت في هذا الطلب بالفعل.', messageEn: 'This request has already been decided.', request });
+  }
+  const advisorName = plainName(caller.nameAr);
+  const note = (notes || '').trim();
 
-      return res.json({
-        success: true,
-        messageAr: 'تم اعتماد الجدول الدراسي رسمياً وتثبيت تسجيل المقررات في السجل الأكاديمي.',
-        messageEn: 'Schedule officially approved and courses registered in academic record.',
-        student: result.updatedStudent,
-      });
-    } else {
-      student.currentPlanStatus = 'Rejected';
-
-      await addAuditLog(
-        caller?.id || 'adv_dr_mahmoud',
-        caller?.nameAr || 'د. محمود صقر',
-        'ACADEMIC_ADVISOR',
-        'ADVISOR_REJECT_SCHEDULE',
-        'CourseRegistration',
-        studentId,
-        `رفض أو طلب تعديل الجدول الدراسي للطالب ${student.nameAr}. السبب: ${notes || 'يرجى مراجعة المرشد الأكاديمي'}.`,
-        `Rejected/requested changes for ${student.nameEn}'s schedule. Reason: ${notes || 'Please consult your advisor'}.`,
-        undefined,
-        { notes }
-      );
-
-      await NotificationRepository.create({
-        recipientId: studentId,
-        type: 'REGISTRATION',
-        titleAr: 'إشعار من المرشد الأكاديمي: مطلوب تعديل الجدول',
-        titleEn: 'Advisor Notice: Schedule Changes Required',
-        messageAr: `طلب المرشد الأكاديمي تعديل جدولك المقترح. الملاحظات: ${notes || 'يرجى تعديل المقررات واختيار شعب بديلة'}.`,
-        messageEn: `Your advisor requested modifications to your schedule. Notes: ${notes || 'Please modify courses and select alternatives'}.`,
-      });
-
-      return res.json({
-        success: true,
-        messageAr: 'تم إرجاع الجدول للطالب مع ملاحظات التعديل.',
-        messageEn: 'Schedule returned to student with requested revisions.',
+  if (decision === 'APPROVE') {
+    const offerings = await OfferingRepository.listAll();
+    const selected = request.offeringIds.map(id => offerings.find(o => o.id === id)).filter((o): o is CourseOffering => !!o);
+    const codes = selected.map(o => o.courseCode);
+    const result = await AcademicTransactionService.registerCourses(student.id, codes, false, caller, selected.map(o => o.id));
+    if (!result.success) {
+      return res.status(422).json({
+        success: false,
+        messageAr: 'تعذر الاعتماد لوجود مخالفات في اللائحة؛ اطلب من الطالب تعديل جدوله.',
+        messageEn: 'Could not approve because of bylaw violations; ask the student to change the schedule.',
+        validation: result.validation,
       });
     }
+    const saved = await RegistrationRequestRepository.save(student.id, {
+      status: 'APPROVED',
+      advisorNotes: note,
+      decidedByName: advisorName,
+      decidedAt: new Date().toISOString(),
+    });
+    await addAuditLog(caller.id, caller.nameAr, caller.role, 'ADVISOR_APPROVE_SCHEDULE', 'RegistrationRequest', saved.id,
+      `اعتماد جدول ${plainName(student.nameAr)} وتسجيل المقررات (${codes.join(', ')}).${note ? ` ملاحظات: ${note}` : ''}`,
+      `Approved ${plainName(student.nameEn)}'s schedule and registered (${codes.join(', ')}).${note ? ` Notes: ${note}` : ''}`);
+    await NotificationRepository.create({
+      recipientId: student.id,
+      type: 'REGISTRATION',
+      titleAr: 'تم اعتماد جدولك وتسجيل مقرراتك',
+      titleEn: 'Your schedule is approved and your courses are registered',
+      messageAr: `اعتمد ${advisorName} جدولك، وأصبحت المقررات (${codes.join('، ')}) مسجلة رسمياً هذا الفصل.${saved.recoveryTitleAr ? ` الجدول يتبع خطة تحسين المعدل «${saved.recoveryTitleAr}».` : ''}${note ? ` ملاحظة المرشد: ${note}` : ''}`,
+      messageEn: `${plainName(caller.nameEn)} approved your schedule; ${codes.join(', ')} are now officially registered.${note ? ` Advisor note: ${note}` : ''}`,
+    });
+    return res.json({ success: true, request: saved, messageAr: 'تم اعتماد الجدول وتسجيل المقررات.', messageEn: 'Schedule approved and courses registered.' });
+  }
+
+  if (decision === 'REQUEST_CHANGES') {
+    if (!note) {
+      return res.status(400).json({ error: 'NOTES_REQUIRED', messageAr: 'اكتب للطالب المطلوب تعديله.', messageEn: 'Tell the student what to change.' });
+    }
+    const saved = await RegistrationRequestRepository.save(student.id, {
+      status: 'CHANGES_REQUESTED',
+      advisorNotes: note,
+      decidedByName: advisorName,
+      decidedAt: new Date().toISOString(),
+    });
+    await addAuditLog(caller.id, caller.nameAr, caller.role, 'ADVISOR_RETURN_SCHEDULE', 'RegistrationRequest', saved.id,
+      `إعادة جدول ${plainName(student.nameAr)} للتعديل: ${note}`, `Returned ${plainName(student.nameEn)}'s schedule for changes: ${note}`);
+    await NotificationRepository.create({
+      recipientId: student.id,
+      type: 'REGISTRATION',
+      titleAr: 'مطلوب تعديل جدولك الدراسي',
+      titleEn: 'Changes needed on your schedule',
+      messageAr: `طلب ${advisorName}: «${note}». عدّل جدولك من صفحة «التسجيل» ثم أعد إرساله.`,
+      messageEn: `${plainName(caller.nameEn)} asked: “${note}”. Update your schedule on the Registration page and send it again.`,
+    });
+    return res.json({ success: true, request: saved, messageAr: 'أُعيد الجدول للطالب مع ملاحظاتك.', messageEn: 'Returned to the student with your notes.' });
+  }
+
+  return res.status(400).json({ error: 'BAD_DECISION', messageAr: 'القرار غير معروف.', messageEn: 'Unknown decision.' });
+}
+
+apiRouter.post('/advisor/registration-requests/:id/decision', async (req: Request, res: Response) => {
+  const caller = getCaller(req);
+  if (!caller || !['ACADEMIC_ADVISOR', 'ADMIN'].includes(caller.role)) {
+    return res.status(403).json({ error: 'ROLE_FORBIDDEN', messageAr: 'هذه العملية للمرشد الأكاديمي.', messageEn: 'Only academic advisors can do this.' });
+  }
+  try {
+    return await decideRegistration(caller, req.params.id, String(req.body?.decision || ''), String(req.body?.notes || ''), res);
+  } catch (err: any) {
+    console.error('Error deciding registration request:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Older form of the decision (by student): decides the student's waiting request.
+apiRouter.post('/advisors/approve-schedule', async (req: Request, res: Response) => {
+  const caller = getCaller(req);
+  if (!caller || !['ACADEMIC_ADVISOR', 'ADMIN'].includes(caller.role)) {
+    return res.status(403).json({ error: 'ROLE_FORBIDDEN', messageAr: 'هذه العملية للمرشد الأكاديمي.', messageEn: 'Only academic advisors can do this.' });
+  }
+  try {
+    const { studentId, decision, notes } = req.body || {};
+    const request = studentId ? await RegistrationRequestRepository.current(String(studentId)) : null;
+    if (!request || request.status !== 'PENDING') {
+      return res.status(404).json({ error: 'NO_PENDING_REQUEST', messageAr: 'لا يوجد جدول مُرسل من هذا الطالب بانتظار القرار.', messageEn: 'This student has no schedule waiting for a decision.' });
+    }
+    return await decideRegistration(caller, request.id, decision === 'APPROVE' ? 'APPROVE' : 'REQUEST_CHANGES', String(notes || ''), res);
   } catch (err: any) {
     console.error('Error processing advisor schedule decision:', err);
     return res.status(500).json({ error: err.message });
@@ -1693,6 +1956,9 @@ apiRouter.get('/instructor/courses/:code/students', async (req: Request, res: Re
 });
 
 apiRouter.post('/instructor/courses/:code/grades', async (req: Request, res: Response) => {
+  if (getCaller(req)?.role === 'TEACHING_ASSISTANT') {
+    return res.status(403).json({ error: 'ROLE_FORBIDDEN', messageAr: 'المعيد يأخذ الحضور فقط ولا يرصد الدرجات.', messageEn: 'Teaching assistants take attendance but do not enter grades.' });
+  }
   const caller = getCaller(req);
   if (caller && caller.role === 'STUDENT') {
     return res.status(403).json({
@@ -1738,6 +2004,9 @@ apiRouter.post('/instructor/courses/:code/grades', async (req: Request, res: Res
 });
 
 apiRouter.post('/instructor/courses/:code/attendance', async (req: Request, res: Response) => {
+  if (getCaller(req)?.role === 'TEACHING_ASSISTANT') {
+    return res.status(403).json({ error: 'ROLE_FORBIDDEN', messageAr: 'المعيد يأخذ الحضور فقط ولا يرصد الدرجات.', messageEn: 'Teaching assistants take attendance but do not enter grades.' });
+  }
   const caller = getCaller(req);
   if (caller && caller.role === 'STUDENT') {
     return res.status(403).json({

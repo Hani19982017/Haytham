@@ -1,17 +1,27 @@
 import { axiosClient } from './axiosClient.js';
 import {
   AcademicRuleConfig,
+  AttendanceCheckInResult,
+  AttendanceCloseResult,
+  AttendanceCourseReport,
+  AttendanceLiveSession,
+  AttendanceSessionKind,
+  AttendanceStatus,
   AuditLogItem,
   Course,
   CourseOffering,
   CourseRecommendation,
   GpaImprovementPlan,
   NotificationItem,
+  RegistrationRequest,
+  RegistrationRequestReview,
   RegistrationValidationDetails,
   ScheduleWhatIfResult,
+  StudentCourseAttendance,
   SemesterScheduleRecommendation,
   Student,
   StudyPlan,
+  TeachingSection,
   UserRole,
 } from '../types/index.js';
 
@@ -24,6 +34,23 @@ export interface AuthUser {
   advisorId?: string;
   instructorId?: string;
   studentId?: string;
+}
+
+/** Save a file the server sends (e.g. an Excel register) to the person's device. */
+async function downloadFile(url: string, fallbackName: string): Promise<void> {
+  const res = await axiosClient.get(url, { responseType: 'blob' });
+  const disposition = String(res.headers['content-disposition'] || '');
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1];
+  const plain = /filename="?([^";]+)"?/i.exec(disposition)?.[1];
+  const name = encoded ? decodeURIComponent(encoded) : plain || fallbackName;
+  const href = URL.createObjectURL(res.data as Blob);
+  const a = document.createElement('a');
+  a.href = href;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(href), 10_000);
 }
 
 export function setActiveAuthContext(token: string, userId: string) {
@@ -234,6 +261,39 @@ export const api = {
     return res.data;
   },
 
+  // Semester registration request (the draft schedule on its way to the advisor)
+  async getRegistrationRequest(studentId: string): Promise<RegistrationRequest | null> {
+    const res = await axiosClient.get(`/students/${encodeURIComponent(studentId)}/registration-request`);
+    return res.data.request;
+  },
+
+  async saveRegistrationDraft(studentId: string, offeringIds: string[], clearRecovery = false): Promise<RegistrationRequest> {
+    const res = await axiosClient.put(`/students/${encodeURIComponent(studentId)}/registration-request`, { offeringIds, clearRecovery });
+    return res.data.request;
+  },
+
+  async adoptRecoveryPlan(
+    studentId: string,
+    strategy: string
+  ): Promise<{ request: RegistrationRequest; added: string[]; missing: string[]; alreadyRegistered: string[] }> {
+    const res = await axiosClient.post(`/students/${encodeURIComponent(studentId)}/recovery-plan/adopt`, { strategy });
+    return res.data;
+  },
+
+  async getAdvisorRegistrationRequests(): Promise<RegistrationRequestReview[]> {
+    const res = await axiosClient.get('/advisor/registration-requests');
+    return res.data;
+  },
+
+  async decideRegistrationRequest(
+    requestId: string,
+    decision: 'APPROVE' | 'REQUEST_CHANGES',
+    notes: string
+  ): Promise<{ success: boolean; request: RegistrationRequest; messageAr: string; messageEn: string }> {
+    const res = await axiosClient.post(`/advisor/registration-requests/${encodeURIComponent(requestId)}/decision`, { decision, notes });
+    return res.data;
+  },
+
   async approveAdvisorSchedule(data: {
     studentId: string;
     decision: 'APPROVE' | 'REJECT';
@@ -308,6 +368,55 @@ export const api = {
       studentId,
       attendancePercentage,
     });
+    return res.data;
+  },
+
+  // Attendance (QR code or by hand)
+  async getTeachingSections(): Promise<TeachingSection[]> {
+    const res = await axiosClient.get('/attendance/sections');
+    return res.data;
+  },
+
+  async startAttendanceSession(offeringId: string, kind?: AttendanceSessionKind): Promise<AttendanceLiveSession> {
+    const res = await axiosClient.post(`/attendance/sections/${encodeURIComponent(offeringId)}/sessions`, { kind });
+    return res.data;
+  },
+
+  async getLiveAttendance(sessionId: string): Promise<AttendanceLiveSession> {
+    const res = await axiosClient.get(`/attendance/sessions/${encodeURIComponent(sessionId)}/live`);
+    return res.data;
+  },
+
+  async markAttendance(sessionId: string, studentId: string, status: AttendanceStatus): Promise<AttendanceLiveSession> {
+    const res = await axiosClient.post(`/attendance/sessions/${encodeURIComponent(sessionId)}/marks`, { studentId, status });
+    return res.data;
+  },
+
+  async closeAttendanceSession(sessionId: string): Promise<AttendanceCloseResult> {
+    const res = await axiosClient.post(`/attendance/sessions/${encodeURIComponent(sessionId)}/close`);
+    return res.data;
+  },
+
+  async getAttendanceCourseReport(offeringId: string): Promise<AttendanceCourseReport> {
+    const res = await axiosClient.get(`/attendance/sections/${encodeURIComponent(offeringId)}/report`);
+    return res.data;
+  },
+
+  async downloadSessionAttendance(sessionId: string): Promise<void> {
+    await downloadFile(`/attendance/sessions/${encodeURIComponent(sessionId)}/report.xlsx`, 'attendance.xlsx');
+  },
+
+  async downloadCourseAttendance(offeringId: string): Promise<void> {
+    await downloadFile(`/attendance/sections/${encodeURIComponent(offeringId)}/report.xlsx`, 'attendance-register.xlsx');
+  },
+
+  async getMyAttendance(): Promise<StudentCourseAttendance[]> {
+    const res = await axiosClient.get('/attendance/me');
+    return res.data;
+  },
+
+  async checkInAttendance(input: { sessionId?: string; token?: string; code?: string }): Promise<AttendanceCheckInResult> {
+    const res = await axiosClient.post('/attendance/check-in', input);
     return res.data;
   },
 

@@ -27,6 +27,10 @@ import { InstructorDashboard } from './components/instructor/InstructorDashboard
 import { AdminDashboard } from './components/admin/AdminDashboard.js';
 import { DepartmentHeadDashboard } from './components/department/DepartmentHeadDashboard.js';
 import { ProcessOfficerRecordsView } from './components/process/ProcessOfficerRecordsView.js';
+import { StudentAttendanceView } from './components/student/StudentAttendanceView.js';
+import { AttendCheckInView } from './components/student/AttendCheckInView.js';
+import { StaffAttendanceView } from './components/attendance/StaffAttendanceView.js';
+import { roleHome } from './components/common/navigation.js';
 
 // Helper to map URL pathname to sidebar tab
 const getTabFromPath = (pathname: string): string => {
@@ -38,6 +42,7 @@ const getTabFromPath = (pathname: string): string => {
   if (p === 'student/gpa-plan') return 'student-gpa-plan';
   if (p === 'student/registration') return 'student-registration';
   if (p === 'student/training') return 'student-training';
+  if (p === 'student/attendance' || p.startsWith('attend/')) return 'student-attendance';
 
   if (p === 'advisor' || p === 'advisor/dashboard') return 'advisor-dashboard';
   if (p === 'advisor/plans') return 'advisor-plans';
@@ -45,6 +50,8 @@ const getTabFromPath = (pathname: string): string => {
 
   if (p === 'instructor' || p === 'instructor/grades') return 'instructor-grades';
   if (p === 'instructor/attendance') return 'instructor-attendance';
+
+  if (p === 'ta' || p.startsWith('ta/')) return 'ta-attendance';
 
   if (p === 'admin' || p === 'admin/dashboard') return 'admin-dashboard';
   if (p === 'admin/users') return 'admin-users';
@@ -80,6 +87,8 @@ const getPathFromTab = (tab: string): string => {
       return '/student/registration';
     case 'student-training':
       return '/student/training';
+    case 'student-attendance':
+      return '/student/attendance';
 
     case 'advisor-dashboard':
       return '/advisor/dashboard';
@@ -92,6 +101,9 @@ const getPathFromTab = (tab: string): string => {
       return '/instructor/grades';
     case 'instructor-attendance':
       return '/instructor/attendance';
+
+    case 'ta-attendance':
+      return '/ta/attendance';
 
     case 'admin-dashboard':
       return '/admin/dashboard';
@@ -158,6 +170,9 @@ const DashboardLayout: React.FC = () => {
             <Route path="/student/gpa-plan" element={<GpaImprovementView onNavigateTab={handleSelectTab} />} />
             <Route path="/student/registration" element={<CourseRegistrationView />} />
             <Route path="/student/training" element={<SummerTrainingView />} />
+            <Route path="/student/attendance" element={<StudentAttendanceView />} />
+            {/* Opened by scanning a lecture's QR code with the phone camera */}
+            <Route path="/attend/:sessionId/:token" element={<AttendCheckInView />} />
 
             {/* Advisor Protected Routes */}
             <Route
@@ -175,6 +190,16 @@ const DashboardLayout: React.FC = () => {
               element={
                 <ProtectedRoute allowedRoles={['INSTRUCTOR', 'ADMIN']}>
                   <InstructorDashboard currentTab={currentTab} onNavigateTab={handleSelectTab} />
+                </ProtectedRoute>
+              }
+            />
+
+            {/* Teaching assistant: attendance for the sections they assist in */}
+            <Route
+              path="/ta/*"
+              element={
+                <ProtectedRoute allowedRoles={['TEACHING_ASSISTANT', 'ADMIN']}>
+                  <StaffAttendanceView />
                 </ProtectedRoute>
               }
             />
@@ -247,53 +272,22 @@ const RoleBasedRedirect: React.FC = () => {
     return <Navigate to="/login" replace />;
   }
 
-  switch (currentUser.role) {
-    case 'ADMIN':
-      return <Navigate to="/admin/dashboard" replace />;
-    case 'ACADEMIC_ADVISOR':
-      return <Navigate to="/advisor/dashboard" replace />;
-    case 'INSTRUCTOR':
-      return <Navigate to="/instructor/grades" replace />;
-    case 'DEPARTMENT_HEAD':
-      return <Navigate to="/department/analytics" replace />;
-    case 'PROCESS_OFFICER':
-      return <Navigate to="/process/records" replace />;
-    case 'STUDENT':
-    default:
-      return <Navigate to="/student/dashboard" replace />;
-  }
+  return <Navigate to={roleHome(currentUser.role)} replace />;
 };
 
 const LoginPageContainer: React.FC = () => {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
 
-  // If already logged in, redirect to appropriate role dashboard immediately
+  // Once signed in, go back to the page that asked for sign-in (e.g. a scanned
+  // attendance QR link), or else to the role's own landing page.
   useEffect(() => {
-    if (currentUser) {
-      switch (currentUser.role) {
-        case 'ADMIN':
-          navigate('/admin/dashboard', { replace: true });
-          break;
-        case 'ACADEMIC_ADVISOR':
-          navigate('/advisor/dashboard', { replace: true });
-          break;
-        case 'INSTRUCTOR':
-          navigate('/instructor/grades', { replace: true });
-          break;
-        case 'DEPARTMENT_HEAD':
-          navigate('/department/analytics', { replace: true });
-          break;
-        case 'PROCESS_OFFICER':
-          navigate('/process/records', { replace: true });
-          break;
-        case 'STUDENT':
-        default:
-          navigate('/student/dashboard', { replace: true });
-          break;
-      }
-    }
-  }, [currentUser, navigate]);
+    if (!currentUser) return;
+    const from = (location.state as { from?: { pathname?: string; search?: string } } | null)?.from;
+    const back = from?.pathname && from.pathname !== '/login' && from.pathname !== '/' ? `${from.pathname}${from.search || ''}` : null;
+    navigate(back || roleHome(currentUser.role), { replace: true });
+  }, [currentUser, navigate, location.state]);
 
   return (
     <LoginView

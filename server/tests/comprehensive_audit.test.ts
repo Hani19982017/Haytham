@@ -291,9 +291,9 @@ for (const rec of omarRecs) {
     }
   }
 
-  // 2. Must not already be passed with grade > D
+  // 2. Must not already be passed with grade > D+
   const passedRec = studentOmar.records.find(r => r.courseCode === rec.courseCode && r.status === 'PASSED');
-  if (passedRec && passedRec.grade && !['D', 'D-'].includes(passedRec.grade)) {
+  if (passedRec && passedRec.grade && !['D+', 'D', 'D-'].includes(passedRec.grade)) {
     allRecsLegal = false;
     illegalDetails = `Course ${rec.courseCode} already passed with ${passedRec.grade} but recommended`;
   }

@@ -38,6 +38,10 @@ export class OfferingRepository {
     const instructorName = row.instructor?.user?.nameAr
       ? `${row.instructor.user.nameAr} (${row.instructor.user.nameEn})`
       : 'أستاذ المادة';
+    const known0 = INITIAL_OFFERINGS.find(o => o.id === row.id);
+    const assistantName = row.assistant?.user?.nameAr
+      ? `${row.assistant.user.nameAr} (${row.assistant.user.nameEn})`
+      : row.assistantName || (row.assistantId ? known0?.assistantName : undefined);
 
     const lectureDayTimeAr = row.scheduleAr || row.lectureDayTimeAr;
     const parsed = parseScheduleText(lectureDayTimeAr || '');
@@ -50,6 +54,8 @@ export class OfferingRepository {
       semesterId: row.semesterId,
       instructorId: row.instructorId,
       instructorName,
+      assistantId: row.assistantId || undefined,
+      assistantName,
       capacity: row.capacity,
       enrolledCount: row.enrolledCount,
       lectureDayTimeAr,
@@ -69,6 +75,7 @@ export class OfferingRepository {
         include: {
           course: true,
           instructor: { include: { user: true } },
+          assistant: { include: { user: true } },
           semester: true,
         },
         orderBy: { course: { code: 'asc' } },
@@ -95,6 +102,7 @@ export class OfferingRepository {
         include: {
           course: true,
           instructor: { include: { user: true } },
+          assistant: { include: { user: true } },
           semester: true,
         },
       });
@@ -114,6 +122,7 @@ export class OfferingRepository {
         include: {
           course: true,
           instructor: { include: { user: true } },
+          assistant: { include: { user: true } },
           semester: true,
         },
       });
@@ -134,6 +143,7 @@ export class OfferingRepository {
         include: {
           course: true,
           instructor: { include: { user: true } },
+          assistant: { include: { user: true } },
           semester: true,
         },
       });

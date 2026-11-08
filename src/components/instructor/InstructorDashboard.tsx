@@ -18,6 +18,7 @@ import {
   gradeTone,
 } from '../ui/index.js';
 import { BookOpen, Save, Users, UserCheck, CalendarClock, MapPin, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { StaffAttendanceView } from '../attendance/StaffAttendanceView.js';
 
 interface InstructorDashboardProps {
   currentTab?: string;
@@ -161,6 +162,11 @@ export const InstructorDashboard: React.FC<InstructorDashboardProps> = ({ curren
       setSavingId(null);
     }
   };
+
+  // Attendance: QR code / manual sessions, absence reports and Excel registers.
+  if (activeTab === 'ATTENDANCE') {
+    return <StaffAttendanceView onOpenGrades={() => handleSelectTab('GRADES')} />;
+  }
 
   if (loading) {
     return <Loader label={t('جارٍ تحميل مقرراتك…', 'Loading your courses…')} />;

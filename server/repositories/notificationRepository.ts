@@ -184,6 +184,32 @@ export class NotificationRepository {
     }
   }
 
+  /**
+   * Send a notification only once per event: `id` identifies the event (e.g. a
+   * student reaching their absence limit in a course). Returns null if it was
+   * already sent.
+   */
+  public static async createOnce(
+    id: string,
+    data: { recipientId: string; type: string; titleAr: string; titleEn: string; messageAr: string; messageEn: string }
+  ): Promise<NotificationItem | null> {
+    try {
+      if (await prisma.notification.findUnique({ where: { id }, select: { id: true } })) return null;
+      const userId = await this.resolveUserId(prisma, data.recipientId);
+      if (!userId) throw new Error(`No user found for notification recipient "${data.recipientId}"`);
+      const row = await prisma.notification.create({
+        data: { id, recipientId: userId, type: data.type, titleAr: data.titleAr, titleEn: data.titleEn, messageAr: data.messageAr, messageEn: data.messageEn, read: false },
+      });
+      return this.mapToDomain(row);
+    } catch (err: any) {
+      if (err?.code === 'P2002') return null; // sent meanwhile
+      if (INITIAL_NOTIFICATIONS.some(n => n.id === id)) return null;
+      const item: NotificationItem = { id, ...data, type: data.type as any, createdAt: new Date().toISOString(), read: false };
+      INITIAL_NOTIFICATIONS.unshift(item);
+      return item;
+    }
+  }
+
   private static async resolveUserId(client: Prisma.TransactionClient | PrismaClient, recipientId: string): Promise<string | null> {
     if (!recipientId) return null;
     const user = await client.user.findUnique({ where: { id: recipientId }, select: { id: true } });

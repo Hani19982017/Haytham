@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext.js';
 import { useLanguage } from '../../context/LanguageContext.js';
 import { api } from '../../services/api.js';
-import { CourseRecommendation } from '../../types/index.js';
+import { addCoursesToTimetable } from '../../services/timetable.js';
+import { CourseOffering, CourseRecommendation, RegistrationRequest } from '../../types/index.js';
 import {
   PageHeader,
   Panel,
@@ -12,6 +13,7 @@ import {
   Loader,
   EmptyState,
   Segmented,
+  Toast,
   cn,
   toneColor,
   toneText,
@@ -54,14 +56,26 @@ export const RecommendationsView: React.FC<RecommendationsViewProps> = ({ onNavi
   const [loading, setLoading] = useState(true);
   const [filterPriority, setFilterPriority] = useState<string>('ALL');
   const [addedCourses, setAddedCourses] = useState<Set<string>>(new Set());
+  const [request, setRequest] = useState<RegistrationRequest | null>(null);
+  const [offerings, setOfferings] = useState<CourseOffering[]>([]);
+  const [adding, setAdding] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ tone: 'sign' | 'signal'; text: string } | null>(null);
+  const studentId = currentUser?.studentId || currentUser?.id || 'stu_omar';
 
   useEffect(() => {
     async function loadRecs() {
-      const studentId = currentUser?.studentId || currentUser?.id || 'stu_omar';
       try {
         setLoading(true);
-        const data = await api.getRecommendations(studentId);
+        const [data, req, offs] = await Promise.all([
+          api.getRecommendations(studentId),
+          api.getRegistrationRequest(studentId).catch(() => null),
+          api.getOfferings().catch(() => [] as CourseOffering[]),
+        ]);
         setRecommendations(data);
+        setRequest(req);
+        setOfferings(offs);
+        // Courses already in the term timetable show as added.
+        setAddedCourses(new Set((req?.offeringIds || []).map(id => offs.find(o => o.id === id)?.courseCode).filter((c): c is string => !!c)));
       } catch (err) {
         console.error('Failed to load recommendations:', err);
       } finally {
@@ -69,20 +83,40 @@ export const RecommendationsView: React.FC<RecommendationsViewProps> = ({ onNavi
       }
     }
     loadRecs();
-  }, [currentUser]);
+  }, [studentId]);
 
-  const handleAddToPlan = (code: string) => {
-    setAddedCourses(prev => {
-      const next = new Set(prev).add(code);
-      try {
-        const studentId = currentUser?.studentId || currentUser?.id || 'stu_omar';
-        const existing = JSON.parse(localStorage.getItem(`staged_recovery_courses_${studentId}`) || '[]');
-        const updated = Array.from(new Set([...existing, ...Array.from(next)]));
-        localStorage.setItem(`staged_recovery_courses_${studentId}`, JSON.stringify(updated));
-        localStorage.setItem('staged_recovery_courses', JSON.stringify(updated));
-      } catch {}
-      return next;
-    });
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(null), 5000);
+    return () => clearTimeout(timer);
+  }, [notice]);
+
+  // Add the course to this term's timetable (kept on the server), in an open section that fits.
+  const handleAddToPlan = async (code: string) => {
+    try {
+      setAdding(code);
+      const res = await addCoursesToTimetable(studentId, [code], { offerings, request });
+      setRequest(res.request);
+      if (res.locked) {
+        setNotice({
+          tone: 'signal',
+          text:
+            res.request?.status === 'PENDING'
+              ? t('جدولك عند المرشد الآن، فلا يمكن إضافة مقررات حتى يصدر قراره.', 'Your timetable is with your advisor; courses cannot be added until they decide.')
+              : t('جدول هذا الفصل معتمد ومسجل بالفعل.', 'This term’s timetable is already approved and registered.'),
+        });
+      } else if (res.missing.includes(code)) {
+        setNotice({ tone: 'signal', text: t(`لا توجد شعبة متاحة لمقرر ${code} هذا الفصل.`, `No open section of ${code} this term.`) });
+      } else {
+        setAddedCourses(prev => new Set(prev).add(code));
+        setNotice({ tone: 'sign', text: t(`أُضيف ${code} إلى جدولك في صفحة التسجيل.`, `${code} was added to your timetable on the Registration page.`) });
+      }
+    } catch (err: any) {
+      const data = err?.response?.data;
+      setNotice({ tone: 'signal', text: (language === 'ar' ? data?.messageAr : data?.messageEn) || t('تعذّرت الإضافة. حاول مرة أخرى.', 'Could not add it. Please try again.') });
+    } finally {
+      setAdding(null);
+    }
   };
 
   const filtered = filterPriority === 'ALL' ? recommendations : recommendations.filter(r => r.priority === filterPriority);
@@ -96,6 +130,11 @@ export const RecommendationsView: React.FC<RecommendationsViewProps> = ({ onNavi
 
   return (
     <div className="space-y-6">
+      {notice && (
+        <Toast tone={notice.tone} onClose={() => setNotice(null)} closeLabel={t('إغلاق', 'Close')}>
+          {notice.text}
+        </Toast>
+      )}
       <PageHeader
         icon={Signpost}
         title={t('المقررات المقترحة لك', 'Suggested courses')}
@@ -289,7 +328,7 @@ export const RecommendationsView: React.FC<RecommendationsViewProps> = ({ onNavi
 
                       <button
                         type="button"
-                        disabled={!rec.prerequisitesMet || isAdded}
+                        disabled={!rec.prerequisitesMet || isAdded || adding === rec.courseCode}
                         onClick={() => handleAddToPlan(rec.courseCode)}
                         className={cn('btn btn-block mt-auto', isAdded ? 'btn-soft disabled:opacity-100' : 'btn-primary')}
                         aria-label={
@@ -301,12 +340,12 @@ export const RecommendationsView: React.FC<RecommendationsViewProps> = ({ onNavi
                         {isAdded ? (
                           <>
                             <Check aria-hidden="true" />
-                            {t('أضيف إلى خطتك', 'Added to your plan')}
+                            {t('في جدولك', 'In your timetable')}
                           </>
                         ) : rec.prerequisitesMet ? (
                           <>
                             <Plus aria-hidden="true" />
-                            {t('أضف إلى خطتي', 'Add to my plan')}
+                            {adding === rec.courseCode ? t('جارٍ الإضافة…', 'Adding…') : t('أضف إلى جدولي', 'Add to my timetable')}
                           </>
                         ) : (
                           t('يحتاج متطلباً سابقاً', 'Needs a prerequisite first')

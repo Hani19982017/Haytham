@@ -4,7 +4,8 @@ export type UserRole =
   | 'ACADEMIC_ADVISOR' 
   | 'STUDENT' 
   | 'PROCESS_OFFICER' 
-  | 'DEPARTMENT_HEAD';
+  | 'DEPARTMENT_HEAD'
+  | 'TEACHING_ASSISTANT';
 
 export type AcademicTrack = 'General' | 'Networks & Cyber Security' | 'Artificial Intelligence';
 
@@ -46,6 +47,8 @@ export interface StudentCourseRecord {
   courseworkMark?: number; // e.g. out of 50
   finalMark?: number;      // e.g. out of 50
   totalMark?: number;      // e.g. out of 100
+  /** Section the student sits in (current-term courses). */
+  offeringId?: string;
 }
 
 export interface Student {
@@ -80,6 +83,9 @@ export interface CourseOffering {
   semesterId: string;
   instructorId: string;
   instructorName: string;
+  /** Teaching assistant (معيد) who also takes attendance for this section. */
+  assistantId?: string;
+  assistantName?: string;
   capacity: number;
   enrolledCount: number;
   lectureDayTimeAr: string;
@@ -346,4 +352,176 @@ export interface GpaImprovementPlan {
     isRetake: boolean;
     maxPossibleGrade: string;
   }[];
+}
+
+// ---------------------------------------------------------------------------
+// Semester registration requests (student → advisor)
+// ---------------------------------------------------------------------------
+
+export type RegistrationRequestStatus = 'DRAFT' | 'PENDING' | 'APPROVED' | 'CHANGES_REQUESTED';
+
+export interface RegistrationRequest {
+  id: string;
+  studentId: string;
+  status: RegistrationRequestStatus;
+  offeringIds: string[];
+  /** GPA recovery route the student adopted for this term, if any. */
+  recoveryStrategy?: string;
+  recoveryTitleAr?: string;
+  recoveryTitleEn?: string;
+  studentNotes?: string;
+  advisorNotes?: string;
+  decidedByName?: string;
+  submittedAt?: string;
+  decidedAt?: string;
+  updatedAt: string;
+}
+
+/** A registration request with everything the advisor needs to decide on it. */
+export interface RegistrationRequestReview {
+  request: RegistrationRequest;
+  student: {
+    id: string;
+    studentCode: string;
+    nameAr: string;
+    nameEn: string;
+    level: number;
+    track: AcademicTrack;
+    cumulativeGpa: number;
+    completedCredits: number;
+    warningCount: number;
+    riskLevel: RiskLevel;
+    isNewStudent: boolean;
+    failedCourses: string[];
+    currentCourses: string[];
+    planStatus: PlanStatus;
+  };
+  offerings: (CourseOffering & { courseNameAr: string; courseNameEn: string; credits: number })[];
+  totalCredits: number;
+  maxAllowedCredits: number;
+  validation: RegistrationValidationDetails | null;
+}
+
+// ---------------------------------------------------------------------------
+// Attendance (QR / manual) — sessions, marks and per-course figures
+// ---------------------------------------------------------------------------
+
+export type AttendanceStatus = 'PRESENT' | 'LATE' | 'ABSENT' | 'EXCUSED';
+export type AttendanceMethod = 'QR' | 'CODE' | 'MANUAL' | 'AUTO';
+export type AttendanceSessionKind = 'LECTURE' | 'SECTION';
+/** OK → NOTICE (half the allowed absences used) → LAST_CHANCE (all used) → DEPRIVED (over the limit). */
+export type AttendanceStanding = 'OK' | 'NOTICE' | 'LAST_CHANCE' | 'DEPRIVED';
+
+export interface AttendanceFigures {
+  plannedSessions: number;
+  heldSessions: number;
+  attended: number;
+  late: number;
+  excused: number;
+  absent: number;
+  allowedAbsences: number;
+  remainingAbsences: number;
+  attendancePercent: number;
+  standing: AttendanceStanding;
+  maxAbsencePercent: number;
+}
+
+/** What a student sees for one current course. */
+export interface StudentCourseAttendance extends AttendanceFigures {
+  offeringId: string;
+  courseCode: string;
+  courseNameAr: string;
+  courseNameEn: string;
+  sectionCode?: string;
+  instructorName: string;
+  assistantName?: string;
+  scheduleAr: string;
+  scheduleEn: string;
+  /** A lecture/section taking attendance right now. */
+  openSessionId?: string;
+  openSessionKind?: AttendanceSessionKind;
+  history: {
+    sessionId: string;
+    startedAt: string;
+    kind: AttendanceSessionKind;
+    status: AttendanceStatus | null;
+    method?: AttendanceMethod;
+  }[];
+}
+
+export interface AttendanceSessionSummary {
+  id: string;
+  offeringId: string;
+  courseCode: string;
+  courseNameAr: string;
+  courseNameEn: string;
+  sectionCode?: string;
+  kind: AttendanceSessionKind;
+  status: 'OPEN' | 'CLOSED';
+  startedAt: string;
+  endedAt?: string;
+  startedByName: string;
+  rosterCount: number;
+  presentCount: number;
+  lateCount: number;
+  absentCount: number;
+  excusedCount: number;
+}
+
+export interface AttendanceRosterEntry extends AttendanceFigures {
+  studentId: string;
+  studentCode: string;
+  nameAr: string;
+  nameEn: string;
+  /** This session's mark (null = not marked yet). */
+  status: AttendanceStatus | null;
+  method?: AttendanceMethod;
+  markedAt?: string;
+}
+
+/** Live view of an open session for the instructor / TA screen. */
+export interface AttendanceLiveSession extends AttendanceSessionSummary {
+  token: string;
+  code: string;
+  checkInUrl: string;
+  qrSvg: string;
+  rotatesInMs: number;
+  roster: AttendanceRosterEntry[];
+}
+
+/** A section the signed-in instructor or TA teaches. */
+export interface TeachingSection {
+  offering: CourseOffering;
+  courseNameAr: string;
+  courseNameEn: string;
+  role: 'INSTRUCTOR' | 'ASSISTANT';
+  rosterCount: number;
+  plannedSessions: number;
+  heldSessions: number;
+  allowedAbsences: number;
+  averageAttendance: number;
+  atRiskCount: number;
+  deprivedCount: number;
+  openSessionId?: string;
+  lastSessionAt?: string;
+}
+
+export interface AttendanceCourseReport {
+  section: TeachingSection;
+  sessions: AttendanceSessionSummary[];
+  students: (AttendanceRosterEntry & { marks: Record<string, AttendanceStatus | null> })[];
+}
+
+export interface AttendanceCheckInResult {
+  success: boolean;
+  alreadyMarked?: boolean;
+  status?: AttendanceStatus;
+  messageAr: string;
+  messageEn: string;
+  course?: StudentCourseAttendance;
+}
+
+export interface AttendanceCloseResult {
+  session: AttendanceSessionSummary;
+  warningsSent: { studentId: string; nameAr: string; nameEn: string; standing: AttendanceStanding; absent: number; allowedAbsences: number }[];
 }

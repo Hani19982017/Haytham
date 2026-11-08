@@ -108,16 +108,16 @@ export class UserRepository {
           studentCode: generatedCode,
           level: 1,
           track: 'General',
-          cumulativeGpa: 3.0,
-          previousGpa: 3.0,
+          cumulativeGpa: 0,
+          previousGpa: 0,
           completedCredits: 0,
-          enrolledCredits: 15,
+          enrolledCredits: 0,
           warningCount: 0,
           consecutiveWarnings: 0,
           riskLevel: 'LOW',
         },
       });
-    } else if (data.role === 'INSTRUCTOR') {
+    } else if (data.role === 'INSTRUCTOR' || data.role === 'TEACHING_ASSISTANT') {
       await prisma.instructor.create({
         data: {
           userId: createdUser.id,

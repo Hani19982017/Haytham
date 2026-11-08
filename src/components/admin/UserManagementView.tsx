@@ -20,6 +20,7 @@ import {
   toneSolidBg,
   trackLabel,
   pick,
+  isOnWarning,
 } from '../ui/index.js';
 import {
   UserPlus,
@@ -42,13 +43,14 @@ import {
 } from 'lucide-react';
 
 /** Role order used in filters and selects. */
-const ROLE_ORDER: UserRole[] = ['STUDENT', 'ACADEMIC_ADVISOR', 'INSTRUCTOR', 'DEPARTMENT_HEAD', 'PROCESS_OFFICER', 'ADMIN'];
+const ROLE_ORDER: UserRole[] = ['STUDENT', 'ACADEMIC_ADVISOR', 'INSTRUCTOR', 'TEACHING_ASSISTANT', 'DEPARTMENT_HEAD', 'PROCESS_OFFICER', 'ADMIN'];
 
 /** Plural labels for the role filter. */
 const ROLE_FILTER_LABEL: Record<UserRole, { ar: string; en: string }> = {
   STUDENT: { ar: 'الطلاب', en: 'Students' },
   ACADEMIC_ADVISOR: { ar: 'المرشدون', en: 'Advisors' },
   INSTRUCTOR: { ar: 'هيئة التدريس', en: 'Instructors' },
+  TEACHING_ASSISTANT: { ar: 'المعيدون', en: 'Teaching assistants' },
   DEPARTMENT_HEAD: { ar: 'رؤساء الأقسام', en: 'Department heads' },
   PROCESS_OFFICER: { ar: 'شؤون الطلاب', en: 'Student affairs' },
   ADMIN: { ar: 'مديرو النظام', en: 'Administrators' },
@@ -1001,7 +1003,7 @@ export const UserManagementView: React.FC = () => {
               <ul className="space-y-1">
                 {filteredStudentsForAssign.map(st => {
                   const isChecked = selectedStudentIds.has(st.id);
-                  const isAtRisk = st.cumulativeGpa < 2.0;
+                  const isAtRisk = isOnWarning(st);
                   return (
                     <li key={st.id}>
                       <button
@@ -1142,7 +1144,7 @@ export const UserManagementView: React.FC = () => {
               </Field>
             )}
 
-            {formData.role === 'INSTRUCTOR' && (
+            {(formData.role === 'INSTRUCTOR' || formData.role === 'TEACHING_ASSISTANT') && (
               <Field label={t('القسم الأكاديمي', 'Department')} htmlFor="add-department" hint={t('اختياري', 'Optional')}>
                 <input
                   id="add-department"

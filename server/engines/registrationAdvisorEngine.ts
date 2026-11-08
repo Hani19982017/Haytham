@@ -148,9 +148,12 @@ export class RegistrationAdvisorEngine {
       const availableOfferings = offeringsByCourse.get(course.code);
       if (!availableOfferings || availableOfferings.length === 0) continue;
 
+      // Already studying it this term
+      if (AcademicRulesEngine.isTakingNow(student, course.code)) continue;
+
       // Check if already passed without retake eligibility
       const passedRec = student.records.find(r => r.courseCode === course.code && r.status === 'PASSED');
-      if (passedRec && passedRec.grade && !['D', 'D-'].includes(passedRec.grade)) {
+      if (passedRec && !AcademicRulesEngine.canRetakePassedGrade(passedRec.grade)) {
         continue;
       }
 
@@ -419,11 +422,25 @@ export class RegistrationAdvisorEngine {
       const course = courseMap.get(off.courseCode);
       if (!course) continue;
 
+      // Already registered in it this term
+      if (AcademicRulesEngine.isTakingNow(student, off.courseCode)) {
+        errorsAr.push(`أنت مسجل بالفعل في مقرر ${course.nameAr} (${course.code}) هذا الفصل، فلا يُسجَّل مرة أخرى.`);
+        errorsEn.push(`You are already registered in ${course.nameEn} (${course.code}) this term.`);
+        duplicateErrors.push({
+          courseCode: course.code,
+          courseNameAr: course.nameAr,
+          courseNameEn: course.nameEn,
+          previousGrade: 'IN_PROGRESS',
+          canRetake: false,
+        });
+        continue;
+      }
+
       // Duplicate / Passed check
       const passedRecord = student.records.find(
         r => r.courseCode === off.courseCode && r.status === 'PASSED'
       );
-      if (passedRecord && passedRecord.grade && !['D', 'D-'].includes(passedRecord.grade)) {
+      if (passedRecord && !AcademicRulesEngine.canRetakePassedGrade(passedRecord.grade)) {
         errorsAr.push(
           `لقد اجتزت بالفعل مقرر ${course.nameAr} (${course.code}) بتقدير (${passedRecord.grade}) ولا يجوز إعادته حسب اللائحة.`
         );
@@ -434,13 +451,15 @@ export class RegistrationAdvisorEngine {
           courseCode: course.code,
           courseNameAr: course.nameAr,
           courseNameEn: course.nameEn,
-          previousGrade: passedRecord.grade,
+          previousGrade: passedRecord.grade || '',
           canRetake: false,
         });
       }
 
-      // Retake rules notice
-      const previousAttempts = student.records.filter(r => r.courseCode === off.courseCode);
+      // Retake rules notice (completed attempts only)
+      const previousAttempts = student.records.filter(
+        r => r.courseCode === off.courseCode && r.status !== 'IN_PROGRESS' && r.status !== 'ENROLLED'
+      );
       if (previousAttempts.length > 0) {
         const lastAttempt = previousAttempts[previousAttempts.length - 1];
         const nextAttemptNum = previousAttempts.length + 1;
@@ -556,7 +575,8 @@ export class RegistrationAdvisorEngine {
 
     // 4. Minimum load check
     let minimumLoadWarning: RegistrationValidationDetails['minimumLoadWarning'];
-    if (totalCredits > 0 && totalCredits < minCredits) {
+    // A first-term student takes the first-term courses of the study plan, which may be fewer.
+    if (totalCredits > 0 && totalCredits < minCredits && !AcademicRulesEngine.isNewStudent(student)) {
       const isGrad = student.remainingCredits <= totalCredits;
       if (isGrad) {
         warningsAr.push(

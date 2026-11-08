@@ -20,6 +20,8 @@ import {
   recordLabel,
   trackLabel,
   pick,
+  isNewStudent,
+  isOnWarning,
 } from '../ui/index.js';
 import { FileSpreadsheet, Search, Lock, Eye, FileText, Users } from 'lucide-react';
 
@@ -50,13 +52,13 @@ export const ProcessOfficerRecordsView: React.FC = () => {
     loadData();
   }, []);
 
-  const goodCount = students.filter(s => s.cumulativeGpa >= 2).length;
+  const goodCount = students.filter(s => !isOnWarning(s)).length;
   const warningCount = students.length - goodCount;
 
   const filtered = students.filter(s => {
     if (levelFilter !== 'ALL' && String(s.level) !== levelFilter) return false;
-    if (standingFilter === 'GOOD' && s.cumulativeGpa < 2) return false;
-    if (standingFilter === 'WARNING' && s.cumulativeGpa >= 2) return false;
+    if (standingFilter === 'GOOD' && isOnWarning(s)) return false;
+    if (standingFilter === 'WARNING' && !isOnWarning(s)) return false;
     if (!search) return true;
     const q = search.toLowerCase();
     return (
@@ -171,7 +173,7 @@ export const ProcessOfficerRecordsView: React.FC = () => {
               ) : (
                 filtered.map(student => {
                   const pct = Math.min(100, Math.round((student.completedCredits / 134) * 100));
-                  const onWarning = student.cumulativeGpa < 2;
+                  const onWarning = isOnWarning(student);
                   return (
                     <tr key={student.id}>
                       <td>
@@ -191,7 +193,7 @@ export const ProcessOfficerRecordsView: React.FC = () => {
                       </td>
                       <td className="num">
                         <span className={cn('t-num text-[15px] font-bold', onWarning ? 'text-signal-600' : 'text-ink-900')}>
-                          {student.cumulativeGpa.toFixed(2)}
+                          {isNewStudent(student) ? '—' : student.cumulativeGpa.toFixed(2)}
                         </span>
                       </td>
                       <td className="min-w-[160px]">

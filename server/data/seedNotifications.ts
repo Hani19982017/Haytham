@@ -1,6 +1,7 @@
 import type { AcademicRuleConfig, Course, CourseOffering, NotificationItem, Student } from '../../src/types/index.js';
 import { AcademicRiskEngine } from '../engines/riskEngine.js';
 import { AcademicRulesEngine } from '../engines/rulesEngine.js';
+import { AttendancePolicy } from '../engines/attendanceEngine.js';
 
 /**
  * Starting notifications for every account, worked out from the academic data
@@ -38,8 +39,8 @@ export const STAFF_ACCOUNT_IDS = {
   processOfficer: 'user_process',
 } as const;
 
-/** Minimum attendance to sit the final exam. */
-export const ATTENDANCE_MIN_PERCENT = 75;
+/** Minimum attendance to sit the final exam (from the bylaw's maximum absence). */
+const ATTENDANCE_MIN = () => AttendancePolicy.minAttendancePercent;
 
 interface SeedInput {
   students: Student[];
@@ -136,14 +137,15 @@ export function buildSeedNotifications({ students, offerings, courses, rules, no
     const gpa = gpaText(s.cumulativeGpa);
     const current = s.records.filter(r => r.status === 'IN_PROGRESS');
 
+    // Courses taken in a section get their absence warnings from the attendance monitor instead.
     current
-      .filter(r => typeof r.attendancePercentage === 'number' && r.attendancePercentage < ATTENDANCE_MIN_PERCENT)
+      .filter(r => !r.offeringId && typeof r.attendancePercentage === 'number' && r.attendancePercentage < ATTENDANCE_MIN())
       .forEach((r, i) =>
         add(s.id, `attendance_${r.courseCode}`, 'RISK', 95 + i * 35, false, {
           titleAr: `تنبيه حضور في ${r.courseCode}`,
           titleEn: `Attendance alert in ${r.courseCode}`,
-          messageAr: `نسبة حضورك في ${r.courseCode} (${r.courseNameAr}) ${r.attendancePercentage}% وهي أقل من الحد الأدنى ${ATTENDANCE_MIN_PERCENT}%. استمرار الغياب قد يحرمك من دخول الامتحان النهائي.`,
-          messageEn: `Your attendance in ${r.courseCode} (${r.courseNameEn}) is ${r.attendancePercentage}%, below the ${ATTENDANCE_MIN_PERCENT}% minimum. More absences can bar you from the final exam.`,
+          messageAr: `نسبة حضورك في ${r.courseCode} (${r.courseNameAr}) ${r.attendancePercentage}% وهي أقل من الحد الأدنى ${ATTENDANCE_MIN()}%. استمرار الغياب قد يحرمك من دخول الامتحان النهائي.`,
+          messageEn: `Your attendance in ${r.courseCode} (${r.courseNameEn}) is ${r.attendancePercentage}%, below the ${ATTENDANCE_MIN()}% minimum. More absences can bar you from the final exam.`,
         })
       );
 
@@ -157,6 +159,15 @@ export function buildSeedNotifications({ students, offerings, courses, rules, no
           messageEn: `Your coursework mark in ${r.courseNameEn}: ${r.courseworkMark} out of 50.`,
         })
       );
+
+    if (AcademicRulesEngine.isNewStudent(s) && current.length === 0) {
+      add(s.id, 'welcome', 'REGISTRATION', 40, false, {
+        titleAr: 'أهلاً بك في الكلية! سجّل مقررات فصلك الأول',
+        titleEn: 'Welcome! Register your first-term courses',
+        messageAr: `جهّزنا لك مقررات الفصل الأول في صفحة «التسجيل». راجعها وأرسلها إلى مرشدك ${advisor.ar} للاعتماد.`,
+        messageEn: `Your first-term courses are ready on the Registration page. Review them and send them to your advisor, ${advisor.en}, for approval.`,
+      });
+    }
 
     if (s.warningCount > 0 && s.cumulativeGpa < minGpa) {
       const n = s.warningCount;
@@ -284,7 +295,7 @@ export function buildSeedNotifications({ students, offerings, courses, rules, no
 
     const lowAttendance = list.flatMap(s =>
       s.records
-        .filter(r => r.status === 'IN_PROGRESS' && typeof r.attendancePercentage === 'number' && r.attendancePercentage < ATTENDANCE_MIN_PERCENT)
+        .filter(r => r.status === 'IN_PROGRESS' && typeof r.attendancePercentage === 'number' && r.attendancePercentage < ATTENDANCE_MIN())
         .map(r => ({ s, r }))
     );
     if (lowAttendance.length) {
@@ -293,13 +304,13 @@ export function buildSeedNotifications({ students, offerings, courses, rules, no
         titleAr:
           lowAttendance.length === 1
             ? `حضور منخفض: ${shortName(lowAttendance[0].s.nameAr)}`
-            : `${countAr(lowAttendance.length, STUDENTS)} بحضور أقل من ${ATTENDANCE_MIN_PERCENT}%`,
+            : `${countAr(lowAttendance.length, STUDENTS)} بحضور أقل من ${ATTENDANCE_MIN()}%`,
         titleEn:
           lowAttendance.length === 1
             ? `Low attendance: ${shortName(lowAttendance[0].s.nameEn)}`
-            : `${countEn(lowAttendance.length, 'student')} below ${ATTENDANCE_MIN_PERCENT}% attendance`,
-        messageAr: `${shown.map(({ s, r }) => `${shortName(s.nameAr)}: ${r.attendancePercentage}% في ${r.courseCode}`).join('، ')}. الحد الأدنى لدخول الامتحان النهائي ${ATTENDANCE_MIN_PERCENT}%.`,
-        messageEn: `${shown.map(({ s, r }) => `${shortName(s.nameEn)}: ${r.attendancePercentage}% in ${r.courseCode}`).join(', ')}. The minimum to sit the final exam is ${ATTENDANCE_MIN_PERCENT}%.`,
+            : `${countEn(lowAttendance.length, 'student')} below ${ATTENDANCE_MIN()}% attendance`,
+        messageAr: `${shown.map(({ s, r }) => `${shortName(s.nameAr)}: ${r.attendancePercentage}% في ${r.courseCode}`).join('، ')}. الحد الأدنى لدخول الامتحان النهائي ${ATTENDANCE_MIN()}%.`,
+        messageEn: `${shown.map(({ s, r }) => `${shortName(s.nameEn)}: ${r.attendancePercentage}% in ${r.courseCode}`).join(', ')}. The minimum to sit the final exam is ${ATTENDANCE_MIN()}%.`,
       });
     }
 
@@ -330,30 +341,11 @@ export function buildSeedNotifications({ students, offerings, courses, rules, no
     add(instructorId, 'grading_open', 'GRADE', 5 * H, false, {
       titleAr: 'رصد الدرجات والحضور متاح لشعبك',
       titleEn: 'Grade and attendance entry is open for your sections',
-      messageAr: `لديك ${countAr(sections.length, SECTIONS)} هذا الفصل (${codes.join('، ')}) ويبلغ عدد المسجلين فيها ${enrolled}. ارصد أعمال السنة والحضور من «رصد الدرجات».`,
-      messageEn: `You teach ${countEn(sections.length, 'section')} this term (${codes.join(', ')}) with ${enrolled} students enrolled. Enter coursework and attendance on the Grades page.`,
+      messageAr: `لديك ${countAr(sections.length, SECTIONS)} هذا الفصل (${codes.join('، ')}) ويبلغ عدد المسجلين فيها ${enrolled}. ارصد أعمال السنة من «رصد الدرجات»، وخذ الحضور بالـ QR من «الحضور».`,
+      messageEn: `You teach ${countEn(sections.length, 'section')} this term (${codes.join(', ')}) with ${enrolled} students enrolled. Enter coursework on the Grades page and take attendance by QR on the Attendance page.`,
     });
 
-    const lowAttendance = students.flatMap(s =>
-      s.records
-        .filter(
-          r =>
-            codes.includes(r.courseCode) &&
-            r.status === 'IN_PROGRESS' &&
-            typeof r.attendancePercentage === 'number' &&
-            r.attendancePercentage < ATTENDANCE_MIN_PERCENT
-        )
-        .map(r => ({ s, r }))
-    );
-    if (lowAttendance.length) {
-      const shown = lowAttendance.slice(0, 3);
-      add(instructorId, 'attendance_watch', 'RISK', 3 * H, false, {
-        titleAr: `${countAr(lowAttendance.length, STUDENTS)} في مقرراتك بحضور أقل من ${ATTENDANCE_MIN_PERCENT}%`,
-        titleEn: `${countEn(lowAttendance.length, 'student')} in your courses below ${ATTENDANCE_MIN_PERCENT}% attendance`,
-        messageAr: `${shown.map(({ s, r }) => `${shortName(s.nameAr)}: ${r.attendancePercentage}% في ${r.courseCode}`).join('، ')}. حدّث الحضور من صفحة «الحضور».`,
-        messageEn: `${shown.map(({ s, r }) => `${shortName(s.nameEn)}: ${r.attendancePercentage}% in ${r.courseCode}`).join(', ')}. Update attendance on the Attendance page.`,
-      });
-    }
+    // Absence reports for instructors come from the attendance monitor (attendanceService.ts).
 
     const busy = sections
       .filter(o => o.capacity > 0 && o.enrolledCount / o.capacity >= 0.85)
@@ -366,6 +358,23 @@ export function buildSeedNotifications({ students, offerings, courses, rules, no
         messageEn: `${busy.map(o => `${o.courseCode} ${splitName(o.sectionCode).en}: ${o.enrolledCount} of ${o.capacity}`).join(', ')}.`,
       });
     }
+  }
+
+  // ------------------------------------------------------ teaching assistants
+  const sectionsByAssistant = new Map<string, CourseOffering[]>();
+  for (const o of offerings) {
+    if (!o.assistantId) continue;
+    if (!sectionsByAssistant.has(o.assistantId)) sectionsByAssistant.set(o.assistantId, []);
+    sectionsByAssistant.get(o.assistantId)!.push(o);
+  }
+  for (const [assistantId, sections] of sectionsByAssistant) {
+    const codes = [...new Set(sections.map(o => o.courseCode))];
+    add(assistantId, 'sections_assigned', 'GENERAL', 6 * H, false, {
+      titleAr: `أنت معيد في ${countAr(sections.length, SECTIONS)} هذا الفصل`,
+      titleEn: `You assist in ${countEn(sections.length, 'section')} this term`,
+      messageAr: `${codes.join('، ')}. ابدأ السكشن من صفحة «الحضور والغياب» واعرض رمز QR للطلاب، أو سجّل الحضور يدوياً.`,
+      messageEn: `${codes.join(', ')}. Start a section on the Attendance page and show the QR code to students, or mark attendance by hand.`,
+    });
   }
 
   // ------------------------------------------------------- department head

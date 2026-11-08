@@ -11,7 +11,6 @@ import {
   FileCheck2,
   Users,
   BookOpen,
-  UserCheck,
   Gauge,
   UserCog,
   SlidersHorizontal,
@@ -22,6 +21,8 @@ import {
   Flame,
   PieChart,
   FileSpreadsheet,
+  QrCode,
+  ScanLine,
 } from 'lucide-react';
 import type { UserRole } from '../../types/index.js';
 
@@ -44,6 +45,14 @@ export const NAV_BY_ROLE: Record<UserRole, NavStation[]> = {
       hintAr: 'مسارك نحو التخرج، معدلك، ومقررات الفصل الحالي',
       hintEn: 'Your route to graduation, GPA and current courses',
       icon: MapIcon,
+    },
+    {
+      id: 'student-attendance',
+      labelAr: 'الحضور',
+      labelEn: 'Attendance',
+      hintAr: 'امسح رمز QR لتسجيل حضورك، وتابع غيابك والمتبقي لك في كل مقرر',
+      hintEn: 'Scan the QR code to check in, and follow your absences in each course',
+      icon: ScanLine,
     },
     {
       id: 'student-recommendations',
@@ -105,10 +114,10 @@ export const NAV_BY_ROLE: Record<UserRole, NavStation[]> = {
     },
     {
       id: 'advisor-plans',
-      labelAr: 'اعتماد الخطط',
-      labelEn: 'Plan approvals',
-      hintAr: 'خطط دراسية تنتظر قرارك',
-      hintEn: 'Study plans waiting for your decision',
+      labelAr: 'الاعتمادات',
+      labelEn: 'Approvals',
+      hintAr: 'جداول التسجيل وخطط الدراسة التي أرسلها طلابك وتنتظر قرارك',
+      hintEn: 'Schedules and study plans your students sent for your decision',
       icon: FileCheck2,
     },
     {
@@ -133,9 +142,19 @@ export const NAV_BY_ROLE: Record<UserRole, NavStation[]> = {
       id: 'instructor-attendance',
       labelAr: 'الحضور',
       labelEn: 'Attendance',
-      hintAr: 'نسب الحضور وتنبيهات الحرمان تحت 75%',
-      hintEn: 'Attendance rates and alerts below 75%',
-      icon: UserCheck,
+      hintAr: 'خذ الحضور برمز QR أو يدوياً، وتقارير الغياب وكشوف Excel',
+      hintEn: 'Take attendance by QR code or by hand; absence reports and Excel sheets',
+      icon: QrCode,
+    },
+  ],
+  TEACHING_ASSISTANT: [
+    {
+      id: 'ta-attendance',
+      labelAr: 'الحضور',
+      labelEn: 'Attendance',
+      hintAr: 'خذ حضور السكاشن برمز QR أو يدوياً، وتقارير غياب الطلاب',
+      hintEn: 'Take section attendance by QR code or by hand; student absence reports',
+      icon: QrCode,
     },
   ],
   ADMIN: [
@@ -235,3 +254,16 @@ export const NAV_BY_ROLE: Record<UserRole, NavStation[]> = {
 };
 
 export const getStationsForRole = (role?: UserRole | null): NavStation[] => (role ? NAV_BY_ROLE[role] || [] : []);
+
+/** Where each role lands after signing in. */
+export const ROLE_HOME: Record<UserRole, string> = {
+  STUDENT: '/student/dashboard',
+  ACADEMIC_ADVISOR: '/advisor/dashboard',
+  INSTRUCTOR: '/instructor/grades',
+  TEACHING_ASSISTANT: '/ta/attendance',
+  ADMIN: '/admin/dashboard',
+  DEPARTMENT_HEAD: '/department/analytics',
+  PROCESS_OFFICER: '/process/records',
+};
+
+export const roleHome = (role?: UserRole | null): string => (role && ROLE_HOME[role]) || '/student/dashboard';

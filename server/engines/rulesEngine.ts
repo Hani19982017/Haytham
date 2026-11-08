@@ -19,10 +19,31 @@ export class AcademicRulesEngine {
   public static SPECIAL_RULE_PERCENTAGE = 0.80; // 80% of 134 = 107.2 hrs
 
   /**
+   * A student in their first term: no graded course yet (courses in progress
+   * are fine). They have no GPA, so GPA-based rules do not apply to them.
+   */
+  public static isNewStudent(student: Pick<Student, 'completedCredits' | 'records'>): boolean {
+    return (student.completedCredits || 0) === 0 && !student.records.some(r => r.status === 'PASSED' || r.status === 'FAILED');
+  }
+
+  /** Passing grades low enough that the course may be studied again to raise the GPA (D+, D, D-). */
+  public static readonly IMPROVEMENT_RETAKE_GRADES = ['D+', 'D', 'D-'];
+
+  /** Is the student already studying this course this term? */
+  public static isTakingNow(student: Pick<Student, 'records'>, courseCode: string): boolean {
+    return student.records.some(r => r.courseCode === courseCode && (r.status === 'IN_PROGRESS' || r.status === 'ENROLLED'));
+  }
+
+  /** May a course passed with this grade be retaken to improve the GPA? */
+  public static canRetakePassedGrade(grade?: string | null): boolean {
+    return !grade || this.IMPROVEMENT_RETAKE_GRADES.includes(grade);
+  }
+
+  /**
    * Determine maximum allowed credits for a student in a regular semester
    */
   public static getMaxCredits(student: Student, isSummer: boolean = false): number {
-    const isNewStudent = student.completedCredits === 0 && student.records.length === 0;
+    const isNewStudent = this.isNewStudent(student);
 
     if (isSummer) {
       return student.cumulativeGpa >= 3.0 ? 9 : 6;
@@ -77,9 +98,15 @@ export class AcademicRulesEngine {
 
       totalRequestedCredits += course.credits;
 
-      // Check if already passed and not allowed to retake (only F or D/D+ allows retake in credit hour systems)
+      if (AcademicRulesEngine.isTakingNow(student, code)) {
+        errorsAr.push(`أنت مسجل بالفعل في مقرر ${course.nameAr} (${code}) هذا الفصل.`);
+        errorsEn.push(`You are already registered in ${course.nameEn} (${code}) this term.`);
+        continue;
+      }
+
+      // Check if already passed and not allowed to retake (only D+/D/D- may be retaken to improve the GPA)
       const passedRecord = student.records.find(r => r.courseCode === code && r.status === 'PASSED');
-      if (passedRecord && passedRecord.grade && !['D', 'D-'].includes(passedRecord.grade)) {
+      if (passedRecord && !AcademicRulesEngine.canRetakePassedGrade(passedRecord.grade)) {
         errorsAr.push(`لقد اجتزت بالفعل مقرر ${course.nameAr} (${code}) بتقدير (${passedRecord.grade}) ولا يجوز إعادته.`);
         errorsEn.push(`You have already passed ${course.nameEn} (${code}) with grade ${passedRecord.grade} and cannot retake it.`);
       }

@@ -4,12 +4,14 @@ import {
   Course,
   CourseOffering,
   NotificationItem,
+  RegistrationRequest,
   Student,
   StudyPlan,
   TrainingStatus,
 } from '../../src/types/index.js';
 import { AcademicRiskEngine } from '../engines/riskEngine.js';
 import { buildSeedNotifications } from './seedNotifications.js';
+import { attendancePercentages, buildAttendanceHistory } from './seedAttendance.js';
 
 export const INITIAL_COURSES: Course[] = [
   // Basic Sciences
@@ -439,6 +441,8 @@ export const INITIAL_OFFERINGS: CourseOffering[] = [
     semesterId: 'sem_fall_2026',
     instructorId: 'inst_dr_adel',
     instructorName: 'أ.د. عادل منصور (Prof. Adel Mansour)',
+    assistantId: 'inst_ta_ahmed',
+    assistantName: 'م. أحمد سمير (Eng. Ahmed Samir)',
     capacity: 65,
     enrolledCount: 58,
     lectureDayTimeAr: 'الأحد والثلاثاء 10:00 - 11:30 ص',
@@ -507,6 +511,8 @@ export const INITIAL_OFFERINGS: CourseOffering[] = [
     semesterId: 'sem_fall_2026',
     instructorId: 'inst_dr_hassan',
     instructorName: 'د. حسن البدري (Dr. Hassan El-Badry)',
+    assistantId: 'inst_ta_ahmed',
+    assistantName: 'م. أحمد سمير (Eng. Ahmed Samir)',
     capacity: 60,
     enrolledCount: 52,
     lectureDayTimeAr: 'الإثنين والأربعاء 08:30 - 10:00 ص',
@@ -535,12 +541,33 @@ export const INITIAL_OFFERINGS: CourseOffering[] = [
     hall: 'قاعة 104',
   },
   {
+    id: 'off_bs103_s1',
+    courseCode: 'BS 103',
+    sectionCode: 'شعبة 1 (SEC-01)',
+    semesterId: 'sem_fall_2026',
+    instructorId: 'inst_dr_hassan',
+    instructorName: 'د. حسن البدري (Dr. Hassan El-Badry)',
+    assistantId: 'inst_ta_ahmed',
+    assistantName: 'م. أحمد سمير (Eng. Ahmed Samir)',
+    capacity: 70,
+    enrolledCount: 44,
+    lectureDayTimeAr: 'الإثنين والأربعاء 12:00 - 01:30 م',
+    lectureDayTimeEn: 'Mon & Wed 12:00 - 01:30 PM',
+    days: ['الإثنين', 'الأربعاء'],
+    startTime: '12:00',
+    endTime: '13:30',
+    periods: [4, 5],
+    hall: 'مدرج الفيزياء',
+  },
+  {
     id: 'off_bs101_s1',
     courseCode: 'BS 101',
     sectionCode: 'شعبة 1 (SEC-01)',
     semesterId: 'sem_fall_2026',
     instructorId: 'inst_dr_adel',
     instructorName: 'أ.د. عادل منصور (Prof. Adel Mansour)',
+    assistantId: 'inst_ta_ahmed',
+    assistantName: 'م. أحمد سمير (Eng. Ahmed Samir)',
     capacity: 70,
     enrolledCount: 45,
     lectureDayTimeAr: 'الأحد والثلاثاء 08:30 - 10:00 ص',
@@ -889,6 +916,7 @@ export const INITIAL_STUDENTS: Student[] = [
         attempt: 1,
         attendancePercentage: 68,
         courseworkMark: 28,
+        offeringId: 'off_cs210_s1',
       },
     ],
   },
@@ -978,6 +1006,7 @@ export const INITIAL_STUDENTS: Student[] = [
         attempt: 1,
         attendancePercentage: 96,
         courseworkMark: 48,
+        offeringId: 'off_cs498',
       },
     ],
   },
@@ -1126,6 +1155,32 @@ export const INITIAL_STUDENTS: Student[] = [
     currentPlanStatus: 'Draft',
     records: [],
   },
+
+  // Freshman demo account (freshman@example.com): first term, no grades, no warnings yet.
+  {
+    id: 'stu_freshman',
+    studentCode: '20260101',
+    nameAr: 'مازن خالد عبد الله',
+    nameEn: 'Mazen Khaled Abdallah',
+    email: 'freshman@example.com',
+    level: 1,
+    track: 'General',
+    advisorId: 'adv_dr_mahmoud',
+    advisorName: 'د. محمود صقر (Dr. Mahmoud Saqr)',
+    cumulativeGpa: 0.0,
+    previousGpa: 0.0,
+    completedCredits: 0,
+    enrolledCredits: 0,
+    remainingCredits: 134,
+    warningCount: 0,
+    consecutiveWarnings: 0,
+    riskLevel: 'LOW',
+    riskReasons: ['طالب مستجد في فصله الأول'],
+    trainingHours: 0,
+    trainingStatus: 'Pending',
+    currentPlanStatus: 'Draft',
+    records: [],
+  },
 ];
 
 // Seed additional realistic students for statistics (100 students total in system)
@@ -1199,6 +1254,67 @@ export const INITIAL_STUDENTS: Student[] = [
         },
       ],
     });
+  }
+})();
+
+// Current-term enrollments: which section each student sits in this term. They
+// give the instructors and the teaching assistant real class lists for attendance.
+(function seedCurrentEnrollments() {
+  const generated = (level: number) => INITIAL_STUDENTS.filter(s => s.id.startsWith('stu_gen_') && s.level === level);
+  const courseByCode = new Map(INITIAL_COURSES.map(c => [c.code, c]));
+  const enroll = (student: Student, offeringId: string) => {
+    const offering = INITIAL_OFFERINGS.find(o => o.id === offeringId);
+    const course = offering && courseByCode.get(offering.courseCode);
+    if (!offering || !course) return;
+    if (student.records.some(r => r.status === 'IN_PROGRESS' && r.courseCode === course.code)) return;
+    const attempts = student.records.filter(r => r.courseCode === course.code).length;
+    student.records.push({
+      courseCode: course.code,
+      courseNameAr: course.nameAr,
+      courseNameEn: course.nameEn,
+      credits: course.credits,
+      status: 'IN_PROGRESS',
+      semesterId: 'sem_fall_2026',
+      semesterName: 'خريف 2026',
+      attempt: attempts + 1,
+      attendancePercentage: 100,
+      offeringId,
+    });
+  };
+
+  // Sara (honors) takes Algorithms with Prof. Adel this term.
+  const sara = INITIAL_STUDENTS.find(s => s.id === 'stu_sara');
+  if (sara) enroll(sara, 'off_cs304');
+
+  // First-year students: BS 101 and BS 103.
+  for (const s of generated(1)) {
+    enroll(s, 'off_bs101_s1');
+    enroll(s, 'off_bs103_s1');
+  }
+  // Second-year students: CS 201; half of them also take CS 210, the other half BS 221.
+  generated(2).forEach((s, i) => {
+    enroll(s, 'off_cs201_s1');
+    enroll(s, i % 2 === 0 ? 'off_cs210_s1' : 'off_bs221_s1');
+  });
+  // Third-year students: CS 304.
+  for (const s of generated(3)) enroll(s, 'off_cs304');
+})();
+
+/** Lectures and sections already held this term, with each student's mark (see seedAttendance.ts). */
+export const INITIAL_ATTENDANCE = buildAttendanceHistory({
+  students: INITIAL_STUDENTS,
+  offerings: INITIAL_OFFERINGS,
+  userIdOfInstructor: id => (id === 'inst_dr_adel' ? 'user_instructor' : id === 'inst_ta_ahmed' ? 'user_ta' : `user_${id}`),
+});
+
+// Keep each current course's attendance percentage in step with that history.
+(function syncAttendancePercentages() {
+  const percentages = attendancePercentages(INITIAL_ATTENDANCE, INITIAL_OFFERINGS);
+  for (const s of INITIAL_STUDENTS) {
+    for (const r of s.records) {
+      const pct = r.offeringId ? percentages.get(`${s.id}|${r.offeringId}`) : undefined;
+      if (pct !== undefined) r.attendancePercentage = pct;
+    }
   }
 })();
 
@@ -1313,7 +1429,32 @@ export const INITIAL_ACADEMIC_RULES: AcademicRuleConfig[] = [
     notesAr: 'تنبيه تدقيق: فترتان تدريبيتان مدة كل منهما 120 ساعة (4 أسابيع على الأقل) بعد إنجاز 30 ساعة معتمدة.',
     notesEn: 'Verification Flag: Two 120-hour periods (total 240 hrs) required after completing 30 credits.',
   },
+  {
+    id: 'rule_max_absence_percent',
+    key: 'MAX_ABSENCE_PERCENT',
+    titleAr: 'الحد الأقصى للغياب في المقرر (%)',
+    titleEn: 'Maximum absence per course (%)',
+    value: 25,
+    defaultValue: 25,
+    needsVerification: true,
+    notesAr: 'نسبة الغياب التي يُحرم بعدها الطالب من دخول الامتحان النهائي، محسوبة من عدد المحاضرات والسكاشن المقررة في الفصل. بانتظار القيمة الرسمية من اللائحة.',
+    notesEn: 'Absence share after which a student is barred from the final exam, counted over the term’s planned lectures and sections. Awaiting the official bylaw value.',
+  },
+  {
+    id: 'rule_teaching_weeks',
+    key: 'TEACHING_WEEKS',
+    titleAr: 'عدد أسابيع الدراسة في الفصل',
+    titleEn: 'Teaching weeks per term',
+    value: 14,
+    defaultValue: 14,
+    needsVerification: false,
+    notesAr: 'يُستخدم لحساب عدد المحاضرات والسكاشن المقررة لكل مقرر، ومنه عدد مرات الغياب المسموح بها.',
+    notesEn: 'Used to count each course’s planned lectures and sections, and from that the allowed absences.',
+  },
 ];
+
+// Semester registration requests (memory fallback when the database is unavailable).
+export const INITIAL_REGISTRATION_REQUESTS: RegistrationRequest[] = [];
 
 export const INITIAL_AUDIT_LOGS: AuditLogItem[] = [
   {

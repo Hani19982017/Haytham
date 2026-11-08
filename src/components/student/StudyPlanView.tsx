@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.js';
 import { useLanguage } from '../../context/LanguageContext.js';
 import { api } from '../../services/api.js';
+import { addCoursesToTimetable } from '../../services/timetable.js';
 import { Course, CourseOffering, PlannedCourse, PlannedSemester, Student, StudyPlan } from '../../types/index.js';
 import { INSTITUTION } from '../../config/institution.js';
 import {
@@ -144,20 +145,22 @@ export const StudyPlanView: React.FC<StudyPlanViewProps> = ({ onNavigateTab }) =
     }
   };
 
-  const handleRegisterSemesterCourses = (sem: PlannedSemester) => {
+  // Put the courses into this term's timetable (kept on the server), then open Registration.
+  const handleRegisterSemesterCourses = async (sem: PlannedSemester) => {
     try {
-      const courseCodes = sem.courses.map(c => c.courseCode);
-      localStorage.setItem(`staged_recovery_courses_${studentId}`, JSON.stringify(courseCodes));
-      localStorage.setItem('staged_recovery_courses', JSON.stringify(courseCodes));
-    } catch {}
+      await addCoursesToTimetable(studentId, sem.courses.map(c => c.courseCode));
+    } catch (err) {
+      console.error('Could not add the term’s courses to the timetable:', err);
+    }
     goToRegistration();
   };
 
-  const handleEnrolSingleCourse = (course: PlannedCourse) => {
+  const handleEnrolSingleCourse = async (course: PlannedCourse) => {
     try {
-      localStorage.setItem(`staged_recovery_courses_${studentId}`, JSON.stringify([course.courseCode]));
-      localStorage.setItem('staged_recovery_courses', JSON.stringify([course.courseCode]));
-    } catch {}
+      await addCoursesToTimetable(studentId, [course.courseCode]);
+    } catch (err) {
+      console.error('Could not add the course to the timetable:', err);
+    }
     setActiveCourseModal(null);
     goToRegistration();
   };

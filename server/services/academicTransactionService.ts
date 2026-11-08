@@ -34,7 +34,9 @@ export class AcademicTransactionService {
     studentId: string,
     courseCodes: string[],
     isSummer: boolean = false,
-    caller?: { id: string; nameAr: string; nameEn: string; role: UserRole }
+    caller?: { id: string; nameAr: string; nameEn: string; role: UserRole },
+    /** Sections the student picked; otherwise any section of each course. */
+    offeringIds?: string[]
   ): Promise<RegistrationTxResult> {
     try {
       return await prisma.$transaction(async (tx) => {
@@ -75,8 +77,12 @@ export class AcademicTransactionService {
           where: { course: { code: { in: courseCodes } } },
           include: { course: true, instructor: { include: { user: true } }, semester: true },
         });
+        // Prefer the picked section of each course.
+        const chosenRows = courseCodes
+          .map(code => offeringRows.find(o => o.course.code === code && offeringIds?.includes(o.id)) || offeringRows.find(o => o.course.code === code))
+          .filter((o): o is (typeof offeringRows)[number] => !!o);
         const offeringMap = new Map<string, CourseOffering>(
-          offeringRows.map(o => [o.course.code, OfferingRepository.mapToDomain(o)])
+          chosenRows.map(o => [o.course.code, OfferingRepository.mapToDomain(o)])
         );
 
         // 3. Deterministic Bylaws Validation
@@ -97,7 +103,7 @@ export class AcademicTransactionService {
 
         // 4. Atomic seat reservation & record creation
         for (const code of courseCodes) {
-          const offRow = offeringRows.find(o => o.course.code === code);
+          const offRow = chosenRows.find(o => o.course.code === code);
           if (offRow) {
             await tx.courseOffering.update({
               where: { id: offRow.id },

@@ -1,4 +1,5 @@
 import { Course, GpaImprovementPlan, Student } from '../../src/types/index.js';
+import { AcademicRulesEngine } from './rulesEngine.js';
 import { calculateDeficitPoints, capRetakeGrade, getGradePoints } from './gpaEngine.js';
 
 export class GpaImprovementPlanner {
@@ -6,11 +7,11 @@ export class GpaImprovementPlanner {
     student: Student,
     allCourses: Course[]
   ): GpaImprovementPlan[] {
+    // A first-term student has no GPA to recover yet.
+    if (AcademicRulesEngine.isNewStudent(student)) return [];
     const deficitInfo = calculateDeficitPoints(student.cumulativeGpa, student.completedCredits, 2.0);
     const failedRecords = student.records.filter(r => r.status === 'FAILED');
-    const lowGradeRecords = student.records.filter(
-      r => r.status === 'PASSED' && (r.grade === 'D' || r.grade === 'D-' || r.grade === 'D+')
-    );
+    const lowGradeRecords = student.records.filter(r => r.status === 'PASSED' && r.grade && AcademicRulesEngine.canRetakePassedGrade(r.grade));
 
     // Collect retake candidates
     const retakeCandidates: { courseCode: string; credits: number; currentGrade: string; attempt: number }[] = [];

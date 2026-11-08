@@ -4,6 +4,7 @@ import { useLanguage } from '../../context/LanguageContext.js';
 import { api } from '../../services/api.js';
 import { Student, PlanStatus } from '../../types/index.js';
 import { TranscriptReportModal } from '../reports/TranscriptReportModal.js';
+import { AdvisorReviewView } from './AdvisorReviewView.js';
 import {
   PageHeader,
   Panel,
@@ -25,6 +26,8 @@ import {
   trackTone,
   trackLabel,
   pick,
+  isNewStudent,
+  isOnWarning,
 } from '../ui/index.js';
 import {
   ShieldAlert,
@@ -38,7 +41,6 @@ import {
   Check,
   XCircle,
   Pencil,
-  NotebookPen,
   UserRound,
 } from 'lucide-react';
 
@@ -185,35 +187,6 @@ export const AdvisorDashboard: React.FC<AdvisorDashboardProps> = ({ currentTab, 
     }
   };
 
-  const handleQuickPlanDecision = async (
-    student: Student,
-    action: 'APPROVE' | 'REJECT'
-  ) => {
-    applyStudentDecisionOptimistically(student, action);
-    showToast(
-      action === 'APPROVE'
-        ? t(
-            `تم اعتماد خطة الطالب "${student.nameAr}".`,
-            `Study plan approved for "${student.nameEn}".`
-          )
-        : t(
-            `تم رفض خطة الطالب "${student.nameAr}" وطُلب منه تعديلها.`,
-            `Study plan rejected for "${student.nameEn}"; changes requested.`
-          )
-    );
-    try {
-      await api.decidePlan(
-        student.id,
-        action,
-        action === 'APPROVE'
-          ? 'تم اعتماد الخطة الدراسية من المرشد الأكاديمي.'
-          : 'يرجى مراجعة المرشد الأكاديمي وتعديل المقررات المختارة.'
-      );
-    } catch (err) {
-      console.error('Quick decision error:', err);
-    }
-  };
-
   const isStudentReviewed = (s: Student): boolean => {
     if (reviewedIds.has(s.id)) return true;
     return s.currentPlanStatus === 'Approved' || s.currentPlanStatus === 'Rejected';
@@ -221,7 +194,7 @@ export const AdvisorDashboard: React.FC<AdvisorDashboardProps> = ({ currentTab, 
 
   const criticalCount = students.filter(s => s.riskLevel === 'CRITICAL').length;
   const highCount = students.filter(s => s.riskLevel === 'HIGH').length;
-  const below2Count = students.filter(s => s.cumulativeGpa < 2.0).length;
+  const below2Count = students.filter(s => isOnWarning(s)).length;
   const pendingPlansCount = students.filter(s => !isStudentReviewed(s)).length;
   const reviewedPlansCount = students.filter(s => isStudentReviewed(s)).length;
 
@@ -241,13 +214,7 @@ export const AdvisorDashboard: React.FC<AdvisorDashboardProps> = ({ currentTab, 
     if (reviewStatusFilter === 'PENDING' && reviewed) return false;
     if (reviewStatusFilter === 'REVIEWED' && !reviewed) return false;
     if (selectedRisk !== 'ALL' && s.riskLevel !== selectedRisk) return false;
-    if (below2Only && s.cumulativeGpa >= 2.0) return false;
-    return matchesSearch(s);
-  });
-
-  // Filtered list for PLANS tab (only unreviewed plans by default, or search)
-  const plansFiltered = students.filter(s => {
-    if (isStudentReviewed(s)) return false;
+    if (below2Only && !isOnWarning(s)) return false;
     return matchesSearch(s);
   });
 
@@ -471,8 +438,8 @@ export const AdvisorDashboard: React.FC<AdvisorDashboardProps> = ({ currentTab, 
                           <p className="text-[12px] text-ink-500">{pick(language, trackLabel[student.track], student.track)}</p>
                         </td>
                         <td className="num">
-                          <span className={cn('t-num text-[15px] font-bold', student.cumulativeGpa < 2.0 ? 'text-signal-600' : 'text-ink-900')}>
-                            {student.cumulativeGpa.toFixed(2)}
+                          <span className={cn('t-num text-[15px] font-bold', isOnWarning(student) ? 'text-signal-600' : 'text-ink-900')}>
+                            {isNewStudent(student) ? '—' : student.cumulativeGpa.toFixed(2)}
                           </span>
                         </td>
                         <td className="num">{warningsCell(student)}</td>
@@ -499,145 +466,16 @@ export const AdvisorDashboard: React.FC<AdvisorDashboardProps> = ({ currentTab, 
       )}
 
       {/* ===================================================== */}
-      {/* PLANS — decisions waiting                              */}
+      {/* PLANS — timetables and study plans waiting, in full     */}
       {/* ===================================================== */}
       {activeTab === 'PLANS' && (
-        <>
-          <PageHeader
-            icon={FileCheck2}
-            tone="sign"
-            title={t('اعتماد الخطط الدراسية', 'Plan approvals')}
-            description={t(
-              'راجع العبء المسموح لكل طالب حسب معدله ثم اعتمد خطته أو اطلب تعديلها. بعد القرار يخرج الطالب من القائمة.',
-              'Check each student’s allowed load for their GPA, then approve the plan or ask for changes. Decided plans leave this list.'
-            )}
-            meta={
-              <Chip tone={plansFiltered.length > 0 ? 'route' : 'sign'}>
-                {t(`${plansFiltered.length} خطة بانتظار القرار`, `${plansFiltered.length} plans awaiting a decision`)}
-              </Chip>
-            }
-            actions={
-              <SearchField
-                value={search}
-                onChange={setSearch}
-                placeholder={t('ابحث بالاسم أو الرقم الجامعي', 'Search by name or student code')}
-                label={t('بحث عن طالب', 'Search students')}
-                className="w-full sm:w-72"
-              />
-            }
-          />
-
-          {plansFiltered.length === 0 ? (
-            <Panel>
-              <EmptyState
-                icon={CheckCircle2}
-                tone="sign"
-                title={search ? t('لا توجد خطة تطابق البحث', 'No plan matches your search') : t('لا توجد خطط تنتظر قرارك', 'No plans are waiting for you')}
-                description={
-                  search
-                    ? t('امسح البحث لرؤية كل الخطط المعلقة.', 'Clear the search to see all pending plans.')
-                    : t('راجعت كل الخطط المعلقة. يمكنك متابعة طلابك من صفحة «طلابي».', 'Every pending plan has been decided. Follow your students from “My students”.')
-                }
-                action={
-                  search ? (
-                    <button type="button" onClick={() => setSearch('')} className="btn btn-secondary">
-                      {t('مسح البحث', 'Clear search')}
-                    </button>
-                  ) : (
-                    <button type="button" onClick={() => handleSelectTab('STUDENTS')} className="btn btn-primary">
-                      <Users aria-hidden="true" />
-                      {t('اذهب إلى طلابي', 'Go to My students')}
-                    </button>
-                  )
-                }
-              />
-            </Panel>
-          ) : (
-            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-              {plansFiltered.map(student => {
-                const maxCredits = getMaxAllowedCredits(student.cumulativeGpa);
-                const pct = Math.min(100, Math.round((student.completedCredits / 134) * 100));
-                return (
-                  <article
-                    key={student.id}
-                    className="panel stripe-start flex flex-col gap-4 p-5"
-                    style={{ ['--stripe' as any]: toneColor[riskTone[student.riskLevel] || 'ink'] }}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <h3 className="text-[15.5px] font-bold text-ink-950">{nameOf(student)}</h3>
-                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                          <span className="chip chip-ink">
-                            <span className="t-num">{student.studentCode}</span>
-                          </span>
-                          <Chip tone="ink">{t(`المستوى ${student.level}`, `Level ${student.level}`)}</Chip>
-                          <Chip tone={trackTone[student.track] || 'ink'}>{pick(language, trackLabel[student.track], student.track)}</Chip>
-                        </div>
-                      </div>
-                      {riskChip(student)}
-                    </div>
-
-                    <dl className="grid grid-cols-3 gap-3 rounded-xl border border-ink-100 bg-ink-50 px-4 py-3">
-                      <div className="kv">
-                        <dt>{t('المعدل', 'GPA')}</dt>
-                        <dd className={student.cumulativeGpa < 2.0 ? '!text-signal-600' : ''}>
-                          <span className="t-num">{student.cumulativeGpa.toFixed(2)}</span>
-                        </dd>
-                      </div>
-                      <div className="kv">
-                        <dt>{t('الحد الأقصى للعبء', 'Max load')}</dt>
-                        <dd>
-                          <span className="t-num">{maxCredits}</span> {t('ساعة', 'cr')}
-                        </dd>
-                      </div>
-                      <div className="kv">
-                        <dt>{t('المنجز من 134', 'Done of 134')}</dt>
-                        <dd>
-                          <span className="t-num">{student.completedCredits}</span>
-                        </dd>
-                      </div>
-                    </dl>
-
-                    <div>
-                      <div className="mb-1 flex items-center justify-between text-[12px] text-ink-500">
-                        <span>{t('التقدم نحو التخرج', 'Progress to graduation')}</span>
-                        <span className="t-num font-semibold text-ink-700">{pct}%</span>
-                      </div>
-                      <Meter value={pct} label={t('التقدم نحو التخرج', 'Progress to graduation')} />
-                    </div>
-
-                    <div className="callout callout-caution !py-2.5 text-[12.5px]">
-                      <NotebookPen aria-hidden="true" />
-                      <p>
-                        <span className="font-bold">{t('التشخيص: ', 'Diagnosis: ')}</span>
-                        {student.riskReasons[0] || t('خطة دراسية تنتظر موافقة المرشد.', 'A study plan waiting for advisor approval.')}
-                      </p>
-                    </div>
-
-                    <div className="mt-auto flex items-center gap-2 border-t border-ink-100 pt-4">
-                      <button type="button" onClick={() => handleQuickPlanDecision(student, 'APPROVE')} className="btn btn-primary flex-1">
-                        <Check aria-hidden="true" />
-                        {t('اعتماد مباشر', 'Approve now')}
-                      </button>
-                      <button type="button" onClick={() => setSelectedStudent(student)} className="btn btn-secondary flex-1">
-                        {t('مراجعة مع ملاحظات', 'Review with notes')}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleQuickPlanDecision(student, 'REJECT')}
-                        className="btn btn-danger-soft btn-icon"
-                        aria-label={t(`رفض خطة ${student.nameAr} وطلب تعديلها`, `Reject ${student.nameEn}'s plan and request changes`)}
-                        title={t('رفض وطلب تعديل', 'Reject and request changes')}
-                      >
-                        <XCircle aria-hidden="true" />
-                      </button>
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          )}
-        </>
+        <AdvisorReviewView
+          students={students}
+          onPlanDecided={(studentId, status) => {
+            setReviewedIds(prev => new Set(prev).add(studentId));
+            setStudents(prev => prev.map(s => (s.id === studentId ? { ...s, currentPlanStatus: status } : s)));
+          }}
+        />
       )}
 
       {/* ===================================================== */}
@@ -766,8 +604,8 @@ export const AdvisorDashboard: React.FC<AdvisorDashboardProps> = ({ currentTab, 
                             <p className="text-[12px] text-ink-500">{pick(language, trackLabel[student.track], student.track)}</p>
                           </td>
                           <td className="num">
-                            <span className={cn('t-num text-[15px] font-bold', student.cumulativeGpa < 2.0 ? 'text-signal-600' : 'text-ink-900')}>
-                              {student.cumulativeGpa.toFixed(2)}
+                            <span className={cn('t-num text-[15px] font-bold', isOnWarning(student) ? 'text-signal-600' : 'text-ink-900')}>
+                              {isNewStudent(student) ? '—' : student.cumulativeGpa.toFixed(2)}
                             </span>
                           </td>
                           <td className="min-w-[170px]">
@@ -849,8 +687,8 @@ export const AdvisorDashboard: React.FC<AdvisorDashboardProps> = ({ currentTab, 
             <dl className="grid grid-cols-2 gap-3 rounded-xl border border-ink-100 bg-ink-50 px-4 py-3 sm:grid-cols-4">
               <div className="kv">
                 <dt>{t('المعدل التراكمي', 'Cumulative GPA')}</dt>
-                <dd className={selectedStudent.cumulativeGpa < 2.0 ? '!text-signal-600' : ''}>
-                  <span className="t-num">{selectedStudent.cumulativeGpa.toFixed(2)}</span>
+                <dd className={isOnWarning(selectedStudent) ? '!text-signal-600' : ''}>
+                  <span className="t-num">{isNewStudent(selectedStudent) ? '—' : selectedStudent.cumulativeGpa.toFixed(2)}</span>
                 </dd>
               </div>
               <div className="kv">

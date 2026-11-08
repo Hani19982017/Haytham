@@ -5,11 +5,14 @@ import {
   INITIAL_STUDENTS,
   INITIAL_ACADEMIC_RULES,
   INITIAL_NOTIFICATIONS,
+  INITIAL_ATTENDANCE,
 } from '../server/data/store.js';
+import { SEMESTER_START, cairoInstant } from '../server/data/seedAttendance.js';
 import { NotificationRepository } from '../server/repositories/notificationRepository.js';
+import { AttendanceService } from '../server/services/attendanceService.js';
 import bcrypt from 'bcryptjs';
 
-type Role = 'ADMIN' | 'INSTRUCTOR' | 'ACADEMIC_ADVISOR' | 'STUDENT' | 'PROCESS_OFFICER' | 'DEPARTMENT_HEAD';
+type Role = 'ADMIN' | 'INSTRUCTOR' | 'ACADEMIC_ADVISOR' | 'STUDENT' | 'PROCESS_OFFICER' | 'DEPARTMENT_HEAD' | 'TEACHING_ASSISTANT';
 
 // Demo accounts shown on the login page (password: password123).
 const DEMO_USERS: { id: string; email: string; nameAr: string; nameEn: string; role: Role; advisorId?: string; instructorId?: string }[] = [
@@ -64,14 +67,32 @@ const DEMO_USERS: { id: string; email: string; nameAr: string; nameEn: string; r
     nameEn: 'Prof. Tariq El-Saadani (Department Head)',
     role: 'DEPARTMENT_HEAD',
   },
+  {
+    id: 'user_freshman',
+    email: 'freshman@example.com',
+    nameAr: 'مازن خالد عبد الله (طالب مستجد)',
+    nameEn: 'Mazen Khaled (New Student)',
+    role: 'STUDENT',
+  },
+  {
+    id: 'user_ta',
+    email: 'ta@example.com',
+    nameAr: 'م. أحمد سمير (معيد)',
+    nameEn: 'Eng. Ahmed Samir (Teaching Assistant)',
+    role: 'TEACHING_ASSISTANT',
+    instructorId: 'inst_ta_ahmed',
+  },
 ];
+
+/** Current-term enrollments date from the first teaching day (attendance counts from then). */
+const TERM_ENROLLMENT_DATE = cairoInstant(SEMESTER_START, '08:00');
 
 const ADVISOR_OFFICE = 'مبنى الحاسبات - غرفة 204';
 const DEPARTMENT = 'Computer Science';
 
 /**
  * Load the demo data (users, courses, sections, 100 students with their
- * records, bylaw rules and each account's notifications).
+ * records, this term's attendance, bylaw rules and each account's notifications).
  *
  * Every table is written with one batched insert, so a remote database (Render)
  * is filled in a few round trips instead of about a thousand. Rows that already
@@ -84,11 +105,12 @@ export async function seedDatabase() {
   const passwordHash = bcrypt.hashSync('password123', 10);
 
   // What is already there (so ids line up and nothing is inserted twice).
-  const [existingUsers, existingCourses, existingAdvisors, existingInstructors] = await Promise.all([
+  const [existingUsers, existingCourses, existingAdvisors, existingInstructors, currentRecords] = await Promise.all([
     prisma.user.findMany({ select: { id: true, email: true } }),
     prisma.course.findMany({ select: { id: true, code: true } }),
     prisma.advisor.findMany({ select: { id: true } }),
     prisma.instructor.findMany({ select: { id: true } }),
+    prisma.courseRecord.findMany({ where: { status: { in: ['IN_PROGRESS', 'ENROLLED'] } }, select: { id: true, studentId: true, courseId: true } }),
   ]);
   const userIdByEmail = new Map(existingUsers.map(u => [u.email.toLowerCase(), u.id]));
   const courseIdByCode = new Map(existingCourses.map(c => [c.code, c.id]));
@@ -196,13 +218,24 @@ export async function seedDatabase() {
     riskLevel: s.riskLevel,
     advisorId: s.advisorId || 'adv_dr_mahmoud',
   }));
+  // A student already registered in a course this term (e.g. through the app) keeps that registration.
+  const takingNow = new Map(currentRecords.map(r => [`${r.studentId}|${r.courseId}`, r.id]));
+  const recordId = (studentId: string, r: { courseCode: string; attempt?: number }) =>
+    `rec_${studentId}_${r.courseCode.replace(/\s+/g, '_')}_${r.attempt || 1}`;
   const records = INITIAL_STUDENTS.flatMap(s =>
     s.records
       .filter(r => courseIdByCode.has(r.courseCode))
+      .filter(r => {
+        if (r.status !== 'IN_PROGRESS') return true;
+        const existing = takingNow.get(`${s.id}|${courseIdByCode.get(r.courseCode)}`);
+        return !existing || existing === recordId(s.id, r);
+      })
       .map(r => ({
-        id: `rec_${s.id}_${r.courseCode.replace(/\s+/g, '_')}_${r.attempt || 1}`,
+        id: recordId(s.id, r),
         studentId: s.id,
         courseId: courseIdByCode.get(r.courseCode)!,
+        offeringId: r.offeringId || null,
+        ...(r.status === 'IN_PROGRESS' ? { createdAt: TERM_ENROLLMENT_DATE } : {}),
         attempt: r.attempt || 1,
         status: r.status as any,
         grade: r.grade || null,
@@ -242,6 +275,7 @@ export async function seedDatabase() {
       courseId: courseIdByCode.get(off.courseCode)!,
       semesterId: currentSemester.id,
       instructorId: off.instructorId,
+      assistantId: off.assistantId || null,
       capacity: off.capacity,
       enrolledCount: off.enrolledCount,
       scheduleAr: off.lectureDayTimeAr,
@@ -254,7 +288,44 @@ export async function seedDatabase() {
   await prisma.student.createMany({ data: students, skipDuplicates: true });
   await prisma.courseRecord.createMany({ data: records, skipDuplicates: true });
 
-  // 5. Academic bylaw rules
+  // Databases loaded by an earlier version: sections get their teaching assistant
+  // and current registrations their section (only where none is set yet).
+  for (const off of INITIAL_OFFERINGS.filter(o => o.assistantId && instructorIds.has(o.assistantId))) {
+    await prisma.courseOffering.updateMany({ where: { id: off.id, assistantId: null }, data: { assistantId: off.assistantId } });
+  }
+  const recordIdsByOffering = new Map<string, string[]>();
+  for (const r of records) {
+    if (!r.offeringId) continue;
+    if (!recordIdsByOffering.has(r.offeringId)) recordIdsByOffering.set(r.offeringId, []);
+    recordIdsByOffering.get(r.offeringId)!.push(r.id);
+  }
+  for (const [offeringId, ids] of recordIdsByOffering) {
+    await prisma.courseRecord.updateMany({ where: { id: { in: ids }, offeringId: null }, data: { offeringId } });
+  }
+
+  // 5. Lectures and sections already held this term, and who attended each
+  const studentIds = new Set(INITIAL_STUDENTS.map(st => st.id));
+  const sessions = INITIAL_ATTENDANCE.sessions.filter(ses => courseIdByCode.has(INITIAL_OFFERINGS.find(o => o.id === ses.offeringId)?.courseCode || ''));
+  const sessionIds = new Set(sessions.map(ses => ses.id));
+  await prisma.attendanceSession.createMany({ data: sessions, skipDuplicates: true });
+  await prisma.attendanceMark.createMany({
+    data: INITIAL_ATTENDANCE.marks.filter(m => sessionIds.has(m.sessionId) && studentIds.has(m.studentId)),
+    skipDuplicates: true,
+  });
+  await AttendanceService.recomputePercentages();
+
+  // 6. Each account's starting notifications (built from the data above), then the
+  // attendance monitor's warnings for students who have used up their absences.
+  const notificationCount = await NotificationRepository.seedDefaults(prisma, INITIAL_NOTIFICATIONS);
+  console.log(`Seeded ${notificationCount} notifications.`);
+  let warnings = 0;
+  for (const offeringId of new Set(sessions.map(ses => ses.offeringId))) {
+    warnings += (await AttendanceService.monitor(offeringId)).length;
+  }
+  console.log(`Seeded ${sessions.length} attendance sessions; ${warnings} absence warnings sent.`);
+
+  // 7. Academic bylaw rules — written last, so a load that stops part-way is
+  // detected on the next start (see server/db/prepare.ts) and completed.
   await prisma.academicRule.createMany({
     data: INITIAL_ACADEMIC_RULES.map(rule => ({
       id: rule.id,
@@ -269,10 +340,6 @@ export async function seedDatabase() {
     })),
     skipDuplicates: true,
   });
-
-  // 6. Each account's starting notifications (built from the data above)
-  const notificationCount = await NotificationRepository.seedDefaults(prisma, INITIAL_NOTIFICATIONS);
-  console.log(`Seeded ${notificationCount} notifications.`);
 
   console.log(`✅ PostgreSQL seed successfully completed! (${((Date.now() - started) / 1000).toFixed(1)} s)`);
 }

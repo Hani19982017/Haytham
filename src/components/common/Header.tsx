@@ -81,7 +81,7 @@ const notificationTarget = (role: UserRole, type: NotificationItem['type']): str
     case 'STUDENT': {
       const byType: Record<NotificationItem['type'], string> = {
         WARNING: 'student-gpa-plan',
-        RISK: 'student-dashboard',
+        RISK: 'student-attendance',
         APPROVAL: 'student-study-plan',
         REGISTRATION: 'student-registration',
         GRADE: 'student-dashboard',
@@ -93,7 +93,9 @@ const notificationTarget = (role: UserRole, type: NotificationItem['type']): str
       if (type === 'APPROVAL' || type === 'REGISTRATION') return 'advisor-plans';
       return type === 'GENERAL' ? 'advisor-students' : 'advisor-dashboard';
     case 'INSTRUCTOR':
-      return type === 'RISK' ? 'instructor-attendance' : 'instructor-grades';
+      return type === 'GRADE' || type === 'REGISTRATION' ? 'instructor-grades' : 'instructor-attendance';
+    case 'TEACHING_ASSISTANT':
+      return 'ta-attendance';
     case 'DEPARTMENT_HEAD':
       if (type === 'REGISTRATION') return 'head-seats';
       return type === 'RISK' ? 'head-hotspots' : 'head-analytics';

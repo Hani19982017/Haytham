@@ -25,7 +25,8 @@ import {
   recordLabel,
   gradeTone,
   chipClass,
-  creditCapForGpa,
+  creditCapForStudent,
+  isNewStudent,
   pick,
   personName,
   type Tone,
@@ -46,6 +47,8 @@ import {
   ChevronLeft,
   ChevronRight,
   RotateCcw,
+  Sparkles,
+  ScanLine,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -62,6 +65,18 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigateTa
   const [loading, setLoading] = useState(true);
   const [recordFilter, setRecordFilter] = useState<'ALL' | 'IN_PROGRESS' | 'PASSED' | 'FAILED'>('ALL');
   const [showTranscriptModal, setShowTranscriptModal] = useState(false);
+  // Lowest attendance the bylaw allows (100 − maximum absence %, editable by the admin).
+  const [minAttendance, setMinAttendance] = useState(75);
+
+  useEffect(() => {
+    api
+      .getAcademicRules()
+      .then(rules => {
+        const pct = Number(rules.find(r => r.key === 'MAX_ABSENCE_PERCENT')?.value);
+        if (pct > 0 && pct < 100) setMinAttendance(100 - pct);
+      })
+      .catch(() => undefined);
+  }, []);
 
   const loadData = async () => {
     const studentId = currentUser?.studentId || currentUser?.id || 'stu_omar';
@@ -116,7 +131,9 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigateTa
     );
   }
 
-  const isAtRisk = student.cumulativeGpa < 2.0;
+  // A first-term student has no GPA and no warnings yet.
+  const newStudent = isNewStudent(student);
+  const isAtRisk = !newStudent && student.cumulativeGpa < 2.0;
   const name = personName(language === 'ar' ? student.nameAr : student.nameEn, language);
   const firstName = name.split(/\s+/)[0];
   const allRecords: StudentCourseRecord[] = student.records || [];
@@ -125,7 +142,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigateTa
   const failedRecords = allRecords.filter(r => r.status === 'FAILED');
   const enrolledCredits = currentRecords.reduce((sum, r) => sum + (r.credits || 0), 0);
   const gpaDelta = student.cumulativeGpa - student.previousGpa;
-  const creditCap = creditCapForGpa(student.cumulativeGpa);
+  const creditCap = creditCapForStudent(student);
   const trainingHours = student.trainingHours || 0;
 
   const displayedRecords = allRecords.filter(r => {
@@ -149,6 +166,15 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigateTa
       why: t('معدلك تحت 2.00؛ الخطة تحدد المقررات التي تعيدها والتقدير المطلوب.', 'Your GPA is under 2.00; a plan sets which courses to retake and the grade you need.'),
     });
   }
+  if (newStudent) {
+    nextSteps.push({
+      tab: 'student-registration',
+      icon: CalendarCheck,
+      tone: 'sign',
+      title: t('سجّل مقررات فصلك الأول', 'Register your first-term courses'),
+      why: t(`حدك ${creditCap} ساعة. ابدأ من الجدول المقترح وأرسله لمرشدك ليعتمده.`, `Your ceiling is ${creditCap} credit hours. Start from the suggested timetable and send it to your advisor.`),
+    });
+  }
   nextSteps.push(
     {
       tab: 'student-recommendations',
@@ -157,12 +183,23 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigateTa
       title: t('راجع المقررات المقترحة لك', 'Review your suggested courses'),
       why: t('كل اقتراح معه سببه وعدد المقررات التي يفتحها.', 'Each suggestion comes with its reason and what it unlocks.'),
     },
+    ...(newStudent
+      ? []
+      : [
+          {
+            tab: 'student-registration',
+            icon: CalendarCheck,
+            tone: 'lane' as Tone,
+            title: t('ابنِ جدول الفصل', 'Build your term timetable'),
+            why: t(`حدك الأقصى ${creditCap} ساعة حسب معدلك الحالي.`, `Your ceiling is ${creditCap} credit hours at your current GPA.`),
+          },
+        ]),
     {
-      tab: 'student-registration',
-      icon: CalendarCheck,
-      tone: 'lane',
-      title: t('ابنِ جدول الفصل القادم', 'Build next term’s timetable'),
-      why: t(`حدك الأقصى ${creditCap} ساعة حسب معدلك الحالي.`, `Your ceiling is ${creditCap} credit hours at your current GPA.`),
+      tab: 'student-attendance',
+      icon: ScanLine,
+      tone: 'sign',
+      title: t('سجّل حضورك وتابع غيابك', 'Check in and follow your absences'),
+      why: t('امسح رمز QR في كل محاضرة، وشاهد المتبقي لك من الغياب في كل مقرر.', 'Scan the QR code in each lecture and see the absences you have left in each course.'),
     },
     {
       tab: 'student-study-plan',
@@ -208,7 +245,13 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigateTa
               <span className="chip chip-ink" dir="ltr">
                 #{student.studentCode}
               </span>
-              <Chip tone={isAtRisk ? 'signal' : 'sign'}>{isAtRisk ? t('تحت الإنذار الأكاديمي', 'On academic warning') : t('وضع أكاديمي سليم', 'Good standing')}</Chip>
+              <Chip tone={isAtRisk ? 'signal' : 'sign'} icon={newStudent ? Sparkles : undefined}>
+                {newStudent
+                  ? t('طالب مستجد: فصلك الأول', 'New student: first term')
+                  : isAtRisk
+                  ? t('تحت الإنذار الأكاديمي', 'On academic warning')
+                  : t('وضع أكاديمي سليم', 'Good standing')}
+              </Chip>
             </div>
             <p className="mt-3 text-[13px] text-ink-500">
               {t('المرشد الأكاديمي:', 'Academic advisor:')} <span className="font-semibold text-ink-800">{personName(student.advisorName, language)}</span>
@@ -250,18 +293,34 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigateTa
           <div className="px-5 py-5 sm:px-7">
             <div className="flex items-baseline justify-between gap-3">
               <span className="text-[12.5px] font-medium text-ink-500">{t('المعدل التراكمي', 'Cumulative GPA')}</span>
-              <span className={cn('t-num text-[12px] font-bold', gpaDelta >= 0 ? 'text-sign-700' : 'text-signal-600')}>
-                {gpaDelta >= 0 ? '+' : '−'}
-                {Math.abs(gpaDelta).toFixed(2)} {t('عن الفصل السابق', 'vs last term')}
-              </span>
+              {!newStudent && (
+                <span className={cn('t-num text-[12px] font-bold', gpaDelta >= 0 ? 'text-sign-700' : 'text-signal-600')}>
+                  {gpaDelta >= 0 ? '+' : '−'}
+                  {Math.abs(gpaDelta).toFixed(2)} {t('عن الفصل السابق', 'vs last term')}
+                </span>
+              )}
             </div>
-            <div className="mt-1 flex items-baseline gap-1.5">
-              <span className={cn('t-num text-[34px] font-extrabold leading-none', isAtRisk ? 'text-signal-600' : 'text-ink-950')}>
-                {student.cumulativeGpa.toFixed(2)}
-              </span>
-              <span className="text-[13px] text-ink-500">/ 4.00</span>
-            </div>
-            <GpaScale gpa={student.cumulativeGpa} className="mt-3" />
+            {newStudent ? (
+              <>
+                <div className="mt-1 flex items-baseline gap-1.5">
+                  <span className="t-num text-[34px] font-extrabold leading-none text-ink-300">—</span>
+                  <span className="text-[13px] text-ink-500">{t('لا يوجد بعد', 'none yet')}</span>
+                </div>
+                <p className="mt-3 text-[12.5px] leading-6 text-ink-600">
+                  {t('يُحسب معدلك بعد ظهور نتائج فصلك الأول، ولا إنذارات عليك.', 'Your GPA is worked out once your first-term results are in. You have no warnings.')}
+                </p>
+              </>
+            ) : (
+              <>
+                <div className="mt-1 flex items-baseline gap-1.5">
+                  <span className={cn('t-num text-[34px] font-extrabold leading-none', isAtRisk ? 'text-signal-600' : 'text-ink-950')}>
+                    {student.cumulativeGpa.toFixed(2)}
+                  </span>
+                  <span className="text-[13px] text-ink-500">/ 4.00</span>
+                </div>
+                <GpaScale gpa={student.cumulativeGpa} className="mt-3" />
+              </>
+            )}
           </div>
 
           <div className="border-t border-ink-100 px-5 py-5 sm:px-7 md:border-s md:border-t-0">
@@ -308,6 +367,32 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigateTa
         </div>
       </Panel>
 
+      {/* ── First term ────────────────────────────────────────────────────── */}
+      {newStudent && (
+        <div className="callout callout-lane flex-col sm:flex-row sm:items-center" role="note">
+          <Sparkles aria-hidden="true" />
+          <div className="flex-1">
+            <p className="font-bold text-lane-800">{t('أهلاً بك في الكلية!', 'Welcome to the faculty!')}</p>
+            <p className="text-lane-700">
+              {currentRecords.length === 0
+                ? t(
+                    `ابدأ بتسجيل مقررات فصلك الأول (حتى ${creditCap} ساعة): الجدول المقترح جاهز في صفحة التسجيل، راجعه وأرسله لمرشدك ${personName(student.advisorName, language)} ليعتمده.`,
+                    `Start by registering your first-term courses (up to ${creditCap} credit hours): a suggested timetable is ready on the Registration page; review it and send it to your advisor.`
+                  )
+                : t('مقررات فصلك الأول مسجلة. سجّل حضورك في كل محاضرة بمسح رمز QR من صفحة «الحضور».', 'Your first-term courses are registered. Check in to each lecture by scanning the QR code on the Attendance page.')}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => onNavigateTab(currentRecords.length === 0 ? 'student-registration' : 'student-attendance')}
+            className="btn btn-primary shrink-0"
+          >
+            {currentRecords.length === 0 ? <CalendarCheck aria-hidden="true" /> : <ScanLine aria-hidden="true" />}
+            {currentRecords.length === 0 ? t('سجّل مقرراتك', 'Register your courses') : t('صفحة الحضور', 'Attendance')}
+          </button>
+        </div>
+      )}
+
       {/* ── Warning notice ─────────────────────────────────────────────────── */}
       {isAtRisk && (
         <div className="callout callout-signal flex-col sm:flex-row sm:items-center" role="alert">
@@ -339,11 +424,17 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigateTa
           <PanelHeader
             icon={BookOpen}
             title={t('مقررات هذا الفصل', 'This term’s courses')}
-            description={t('الحضور وأعمال السنة أولاً بأول. تحت 75% حضور يعني خطر الحرمان.', 'Attendance and coursework as they come in. Under 75% attendance risks exclusion.')}
+            description={t(`الحضور وأعمال السنة أولاً بأول. تحت ${minAttendance}% حضور يعني خطر الحرمان.`, `Attendance and coursework as they come in. Under ${minAttendance}% attendance risks exclusion.`)}
             actions={
-              <button type="button" onClick={() => onNavigateTab('student-registration')} className="btn btn-secondary btn-sm">
-                {t('تعديل التسجيل', 'Change registration')}
-              </button>
+              <>
+                <button type="button" onClick={() => onNavigateTab('student-attendance')} className="btn btn-secondary btn-sm">
+                  <ScanLine aria-hidden="true" />
+                  {t('الحضور', 'Attendance')}
+                </button>
+                <button type="button" onClick={() => onNavigateTab('student-registration')} className="btn btn-secondary btn-sm">
+                  {t('التسجيل', 'Registration')}
+                </button>
+              </>
             }
           />
 
@@ -362,7 +453,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigateTa
             <ul className="divide-y divide-ink-100">
               {currentRecords.map((rec, idx) => {
                 const att = rec.attendancePercentage ?? 100;
-                const attRisk = att < 75;
+                const attRisk = att < minAttendance;
                 return (
                   <li key={`${rec.courseCode}_${rec.semesterId || ''}_${idx}`} className="grid grid-cols-1 gap-3 py-3.5 sm:grid-cols-[minmax(0,1fr)_200px] sm:items-center">
                     <div className="flex min-w-0 items-start gap-3">
@@ -386,10 +477,10 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigateTa
                       </div>
                       <div className="relative">
                         <Meter value={att} tone={attRisk ? 'signal' : 'sign'} label={t('نسبة الحضور', 'Attendance rate')} />
-                        {/* 75% threshold tick */}
-                        <span className="absolute -top-1 h-[14px] w-[2px] rounded bg-ink-700" style={{ insetInlineStart: '75%' }} aria-hidden="true" />
+                        {/* bylaw threshold tick */}
+                        <span className="absolute -top-1 h-[14px] w-[2px] rounded bg-ink-700" style={{ insetInlineStart: `${minAttendance}%` }} aria-hidden="true" />
                       </div>
-                      {attRisk && <p className="mt-1 text-[11.5px] font-semibold text-signal-600">{t('خطر حرمان: أقل من 75%', 'Exclusion risk: below 75%')}</p>}
+                      {attRisk && <p className="mt-1 text-[11.5px] font-semibold text-signal-600">{t(`خطر حرمان: أقل من ${minAttendance}%`, `Exclusion risk: below ${minAttendance}%`)}</p>}
                     </div>
                   </li>
                 );
@@ -537,7 +628,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigateTa
                         )}
                       </td>
                       <td className="num">
-                        <span className={cn('t-num font-bold', att < 75 ? 'text-signal-600' : 'text-ink-700')}>{att}%</span>
+                        <span className={cn('t-num font-bold', att < minAttendance ? 'text-signal-600' : 'text-ink-700')}>{att}%</span>
                       </td>
                       <td>
                         <span className={chipClass[tone]}>{pick(language, recordLabel[rec.status], rec.status)}</span>

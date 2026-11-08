@@ -148,6 +148,7 @@ export const roleLabel: Record<string, Bilingual> = {
   ADMIN: { ar: 'مدير النظام', en: 'Administrator' },
   ACADEMIC_ADVISOR: { ar: 'مرشد أكاديمي', en: 'Academic advisor' },
   INSTRUCTOR: { ar: 'عضو هيئة التدريس', en: 'Instructor' },
+  TEACHING_ASSISTANT: { ar: 'معيد', en: 'Teaching assistant' },
   STUDENT: { ar: 'طالب', en: 'Student' },
   PROCESS_OFFICER: { ar: 'شؤون الطلاب', en: 'Student affairs' },
   DEPARTMENT_HEAD: { ar: 'رئيس القسم', en: 'Department head' },
@@ -158,6 +159,7 @@ export const roleTone: Record<string, Tone> = {
   ADMIN: 'signal',
   ACADEMIC_ADVISOR: 'lane',
   INSTRUCTOR: 'plum',
+  TEACHING_ASSISTANT: 'route',
   STUDENT: 'sign',
   PROCESS_OFFICER: 'ink',
   DEPARTMENT_HEAD: 'caution',
@@ -182,6 +184,70 @@ export const creditCapForGpa = (gpa: number): number => {
   return 12;
 };
 
+/** A first-term student: nothing passed or failed yet, so no GPA and no warnings. */
+export const isNewStudent = (s?: { completedCredits?: number; records?: { status: string }[] } | null): boolean =>
+  !!s && (s.completedCredits || 0) === 0 && !(s.records || []).some(r => r.status === 'PASSED' || r.status === 'FAILED');
+
+/** On academic warning: GPA under 2.00 (never a first-term student, who has no GPA yet). */
+export const isOnWarning = (s?: { cumulativeGpa: number; completedCredits?: number; records?: { status: string }[] } | null): boolean =>
+  !!s && !isNewStudent(s) && s.cumulativeGpa < 2;
+
+/** The student's credit ceiling this term (first-term students: 21, as in the bylaw engine). */
+export const creditCapForStudent = (s: { cumulativeGpa: number; completedCredits?: number; records?: { status: string }[] }): number =>
+  isNewStudent(s) ? 21 : creditCapForGpa(s.cumulativeGpa);
+
+// --- Attendance ------------------------------------------------------------------
+export const attendanceStatusTone: Record<string, Tone> = {
+  PRESENT: 'sign',
+  LATE: 'route',
+  ABSENT: 'signal',
+  EXCUSED: 'lane',
+};
+
+export const attendanceStatusLabel: Record<string, Bilingual> = {
+  PRESENT: { ar: 'حاضر', en: 'Present' },
+  LATE: { ar: 'متأخر', en: 'Late' },
+  ABSENT: { ar: 'غائب', en: 'Absent' },
+  EXCUSED: { ar: 'غياب بعذر', en: 'Excused' },
+};
+
+export const attendanceMethodLabel: Record<string, Bilingual> = {
+  QR: { ar: 'رمز QR', en: 'QR code' },
+  CODE: { ar: 'الكود', en: 'Code' },
+  MANUAL: { ar: 'يدوي', en: 'By hand' },
+  AUTO: { ar: 'لم يسجّل', en: 'Not checked in' },
+};
+
+/** Where a student stands against the bylaw absence limit in one course. */
+export const standingTone: Record<string, Tone> = {
+  OK: 'sign',
+  NOTICE: 'route',
+  LAST_CHANCE: 'caution',
+  DEPRIVED: 'signal',
+};
+
+export const standingLabel: Record<string, Bilingual> = {
+  OK: { ar: 'منتظم', en: 'On track' },
+  NOTICE: { ar: 'تنبيه غياب', en: 'Absence notice' },
+  LAST_CHANCE: { ar: 'آخر فرصة', en: 'Last chance' },
+  DEPRIVED: { ar: 'تجاوز حد الغياب', en: 'Over the limit' },
+};
+
+// --- Registration request (the term schedule on its way to the advisor) ------------
+export const requestStatusTone: Record<string, Tone> = {
+  DRAFT: 'ink',
+  PENDING: 'lane',
+  APPROVED: 'sign',
+  CHANGES_REQUESTED: 'caution',
+};
+
+export const requestStatusLabel: Record<string, Bilingual> = {
+  DRAFT: { ar: 'مسودة لم تُرسل', en: 'Draft, not sent' },
+  PENDING: { ar: 'عند المرشد', en: 'With the advisor' },
+  APPROVED: { ar: 'معتمد ومسجل', en: 'Approved and registered' },
+  CHANGES_REQUESTED: { ar: 'مطلوب تعديل', en: 'Changes requested' },
+};
+
 export const pick = (lang: string, value?: Bilingual | null, fallback = ''): string =>
   value ? (lang === 'ar' ? value.ar : value.en) : fallback;
 
@@ -190,6 +256,14 @@ export const pick = (lang: string, value?: Bilingual | null, fallback = ''): str
  * "د. حسن البدري (Dr. Hassan El-Badry)" or "عمر فاروق (طالب - تحت الإنذار)".
  * Return just the person's name in the requested language.
  */
+/** "شعبة 1 (SEC-01)" → the Arabic part, or the part in brackets for English. */
+export const bilingualPart = (value: string | undefined, lang: string, fallback: string): string => {
+  if (!value) return fallback;
+  const match = value.match(/^(.*?)\s*\(([^)]+)\)\s*$/);
+  if (!match) return value;
+  return lang === 'ar' ? match[1].trim() || value : match[2].trim();
+};
+
 export const personName = (raw: string | undefined | null, lang: string): string => {
   if (!raw) return '';
   const s = raw.trim();

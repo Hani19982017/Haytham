@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext.js';
 import { useLanguage } from '../../context/LanguageContext.js';
 import { UserRole } from '../../types/index.js';
 import { Loader } from '../ui/primitives.js';
+import { roleHome } from '../common/navigation.js';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
@@ -34,15 +35,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   // Enforce Role-Based Access Control (RBAC)
   if (allowedRoles && allowedRoles.length > 0 && !allowedRoles.includes(currentUser.role)) {
     // Route to appropriate role landing page if accessing unauthorized role route
-    const roleFallbackRoute: Record<UserRole, string> = {
-      STUDENT: '/student/dashboard',
-      ACADEMIC_ADVISOR: '/advisor/dashboard',
-      INSTRUCTOR: '/instructor/grades',
-      ADMIN: '/admin/dashboard',
-      DEPARTMENT_HEAD: '/department/analytics',
-      PROCESS_OFFICER: '/process/records',
-    };
-    return <Navigate to={roleFallbackRoute[currentUser.role] || '/login'} replace />;
+    return <Navigate to={roleHome(currentUser.role)} replace />;
   }
 
   return <>{children}</>;

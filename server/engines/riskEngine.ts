@@ -1,4 +1,6 @@
 import { RiskLevel, Student } from '../../src/types/index.js';
+import { AcademicRulesEngine } from './rulesEngine.js';
+import { AttendancePolicy } from './attendanceEngine.js';
 
 export interface RiskFeatureVector {
   cumulativeGpa: number;
@@ -66,9 +68,18 @@ export class AcademicRiskEngine {
     const reasonsEn: string[] = [];
     let score = 10;
     const features = this.extractFeatureVector(student);
+    // A first-term student has no grades yet, so GPA, warnings and failures do not apply.
+    const isNewStudent = AcademicRulesEngine.isNewStudent(student);
+    if (isNewStudent) {
+      score = 0;
+      reasonsAr.push('طالب مستجد في فصله الأول: لا يوجد معدل تراكمي بعد.');
+      reasonsEn.push('New student in their first term: no GPA yet.');
+    }
 
     // 1. Cumulative GPA evaluation
-    if (student.cumulativeGpa < 1.0) {
+    if (isNewStudent) {
+      // nothing to judge yet
+    } else if (student.cumulativeGpa < 1.0) {
       score += 50;
       reasonsAr.push(`المعدل التراكمي متدنٍ للغاية (${student.cumulativeGpa}) - تحت 1.00`);
       reasonsEn.push(`Cumulative GPA is critically low (${student.cumulativeGpa}) - under 1.00`);
@@ -119,13 +130,14 @@ export class AcademicRiskEngine {
       reasonsEn.push(`Previous failure in: (${codes})`);
     }
 
-    // 5. Low Attendance checks
-    const lowAttendance = student.records.filter(r => r.status === 'IN_PROGRESS' && (r.attendancePercentage ?? 100) < 75);
+    // 5. Low Attendance checks (minimum attendance comes from the bylaw's maximum absence)
+    const minAttendance = AttendancePolicy.minAttendancePercent;
+    const lowAttendance = student.records.filter(r => r.status === 'IN_PROGRESS' && (r.attendancePercentage ?? 100) < minAttendance);
     if (lowAttendance.length > 0) {
       score += 25;
       for (const item of lowAttendance) {
-        reasonsAr.push(`نسبة الحضور في ${item.courseCode} هي (${item.attendancePercentage}%) - أقل من 75% ومحروم من دخول النهائي محتملاً`);
-        reasonsEn.push(`Attendance in ${item.courseCode} is (${item.attendancePercentage}%) - below 75% threshold (exam ban risk)`);
+        reasonsAr.push(`نسبة الحضور في ${item.courseCode} هي (${item.attendancePercentage}%) - أقل من ${minAttendance}% ومحروم من دخول النهائي محتملاً`);
+        reasonsEn.push(`Attendance in ${item.courseCode} is (${item.attendancePercentage}%) - below ${minAttendance}% threshold (exam ban risk)`);
       }
     }
 

@@ -84,15 +84,16 @@ export async function prepareDatabase(
   try {
     const [users, courses, rules] = await Promise.all([prisma.user.count(), prisma.course.count(), prisma.academicRule.count()]);
     const empty = users === 0 && courses === 0;
-    // The seed writes the bylaw rules last and the app cannot delete them, so missing
-    // rules mean an earlier load stopped part-way (e.g. a host restarted the server).
+    // The seed writes the bylaw rules last and the app cannot delete them, so fewer
+    // rules than the demo data has mean an earlier load stopped part-way (e.g. a host
+    // restarted the server) or the database was loaded by an older version of the app.
     const unfinished = !empty && rules < INITIAL_ACADEMIC_RULES.length;
     if (empty || unfinished) {
       const seedStarted = Date.now();
       console.log(
         empty
           ? '[Database] New, empty database: loading the demo data…'
-          : '[Database] An earlier load of the demo data did not finish: adding what is missing…'
+          : '[Database] The demo data is incomplete or from an older version: adding what is missing…'
       );
       const seed = options.seed ?? (async () => (await import('../../prisma/seed.js')).seedDatabase());
       await seed();

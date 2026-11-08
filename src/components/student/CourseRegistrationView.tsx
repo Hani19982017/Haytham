@@ -5,6 +5,7 @@ import { api } from '../../services/api.js';
 import {
   Course,
   CourseOffering,
+  RegistrationRequest,
   RegistrationValidationDetails,
   ScheduleWhatIfResult,
   SemesterScheduleRecommendation,
@@ -30,8 +31,10 @@ import {
   toneColor,
   toneText,
   chipClass,
-  planStatusTone,
-  planStatusLabel,
+  requestStatusTone,
+  requestStatusLabel,
+  isNewStudent,
+  isOnWarning,
   trackLabel,
   pick,
   personName,
@@ -59,6 +62,10 @@ import {
   Info,
   RotateCcw,
   FileText,
+  Lock,
+  Flag,
+  Hourglass,
+  Sparkles,
 } from 'lucide-react';
 
 /* ----------------------------------------------------------------------------
@@ -223,46 +230,52 @@ export const CourseRegistrationView: React.FC = () => {
   const [degreePlan, setDegreePlan] = useState<StudyPlan | null>(null);
   const [loadingDegreePlan, setLoadingDegreePlan] = useState<boolean>(false);
 
+  // The term schedule kept on the server: draft → sent to the advisor → approved, or returned for changes.
+  const [request, setRequest] = useState<RegistrationRequest | null>(null);
+  const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
+  const [studentNote, setStudentNote] = useState('');
+  const draftDirty = useRef(false);
+  const locked = request?.status === 'PENDING' || request?.status === 'APPROVED';
+
   // Load Initial Academic Data
   const loadAcademicData = async () => {
     const studentId = currentUser?.studentId || currentUser?.id || 'stu_omar';
     try {
       setLoading(true);
-      const [studentData, offeringsData, coursesData, recData] = await Promise.all([
+      const [studentData, offeringsData, coursesData, recData, requestData] = await Promise.all([
         api.getStudentById(studentId),
         api.getOfferings(),
         api.getCourses(),
         api.getRegistrationRecommendation(studentId),
+        api.getRegistrationRequest(studentId).catch(() => null),
       ]);
 
       setStudent(studentData);
       setOfferings(offeringsData);
       setCourses(coursesData);
       setRecommendation(recData);
+      setRequest(requestData);
+      draftDirty.current = false;
 
-      // Pre-populate draft with initial recommended offerings or adopted recovery plan
-      let initialOfferingIds = recData && recData.recommendedCourses.length > 0
-        ? recData.recommendedCourses.map(c => c.offeringId)
-        : [];
+      // The saved schedule (with any GPA recovery route the student adopted) comes first;
+      // with nothing saved yet, start from the suggested timetable.
+      const savedIds = (requestData?.offeringIds || []).filter(id => offeringsData.some(o => o.id === id));
+      const initialOfferingIds =
+        savedIds.length > 0 || (requestData && requestData.status !== 'DRAFT')
+          ? savedIds
+          : recData && recData.recommendedCourses.length > 0
+          ? recData.recommendedCourses.map(c => c.offeringId)
+          : [];
+      setSelectedOfferingIds(initialOfferingIds);
 
-      try {
-        const stagedRaw = localStorage.getItem(`staged_recovery_courses_${studentId}`) || localStorage.getItem('staged_recovery_courses');
-        if (stagedRaw) {
-          const stagedCodes: string[] = JSON.parse(stagedRaw);
-          if (stagedCodes.length > 0) {
-            const stagedOfferings = stagedCodes
-              .map(code => offeringsData.find(o => o.courseCode === code && o.enrolledCount < o.capacity))
-              .filter((o): o is CourseOffering => !!o)
-              .map(o => o.id);
-            if (stagedOfferings.length > 0) {
-              initialOfferingIds = Array.from(new Set([...stagedOfferings, ...initialOfferingIds]));
-            }
-          }
-        }
-      } catch {}
-
-      if (initialOfferingIds.length > 0) {
-        setSelectedOfferingIds(initialOfferingIds);
+      // Which of the draft's courses come from the adopted GPA recovery route.
+      if (requestData?.recoveryStrategy) {
+        api
+          .getGpaPlans(studentId)
+          .then(plans => setRecoveryCodes(plans.find(p => p.strategy === requestData.recoveryStrategy)?.courses.map(c => c.courseCode) || []))
+          .catch(() => setRecoveryCodes([]));
+      } else {
+        setRecoveryCodes([]);
       }
     } catch (err) {
       console.error('Failed to load academic data:', err);
@@ -317,7 +330,7 @@ export const CourseRegistrationView: React.FC = () => {
 
   // REAL-TIME VALIDATION whenever selected offerings change
   useEffect(() => {
-    if (!student || selectedOfferings.length === 0) {
+    if (!student || selectedOfferings.length === 0 || locked) {
       setValidation(null);
       return;
     }
@@ -344,7 +357,23 @@ export const CourseRegistrationView: React.FC = () => {
       isMounted = false;
       clearTimeout(timer);
     };
-  }, [selectedOfferingIds, student]);
+  }, [selectedOfferingIds, student, locked]);
+
+  // Keep the draft on the server, so it is there on any device and stays with the adopted route.
+  useEffect(() => {
+    if (!student || locked || !draftDirty.current) return;
+    const timer = setTimeout(async () => {
+      try {
+        const saved = await api.saveRegistrationDraft(student.id, selectedOfferingIds);
+        draftDirty.current = false;
+        setRequest(saved);
+      } catch (err: any) {
+        if (err?.response?.status === 409 && err.response.data?.request) setRequest(err.response.data.request);
+        console.error('Draft save failed:', err);
+      }
+    }, 700);
+    return () => clearTimeout(timer);
+  }, [selectedOfferingIds, student, locked]);
 
   // Informational confirmations show as a toast near the eye-line, then clear.
   useEffect(() => {
@@ -371,7 +400,8 @@ export const CourseRegistrationView: React.FC = () => {
 
   // ACTION 1: Accept Entire Recommended Schedule
   const handleAcceptRecommendedSchedule = () => {
-    if (!recommendation) return;
+    if (!recommendation || locked) return;
+    draftDirty.current = true;
     const recOfferingIds = recommendation.recommendedCourses.map(c => c.offeringId);
     setSelectedOfferingIds(recOfferingIds);
     setSubmissionFeedback({
@@ -383,13 +413,16 @@ export const CourseRegistrationView: React.FC = () => {
 
   // ACTION 2: Add Single Course to Draft
   const handleAddCourseOffering = (offeringId: string) => {
-    if (selectedOfferingIds.includes(offeringId)) return;
+    if (locked || selectedOfferingIds.includes(offeringId)) return;
+    draftDirty.current = true;
     setSelectedOfferingIds(prev => [...prev, offeringId]);
     setIsAddCourseModalOpen(false);
   };
 
   // ACTION 3: Remove Course from Draft
   const handleRemoveCourse = (courseCode: string) => {
+    if (locked) return;
+    draftDirty.current = true;
     setSelectedOfferingIds(prev =>
       prev.filter(id => {
         const off = offeringMap.get(id);
@@ -400,6 +433,8 @@ export const CourseRegistrationView: React.FC = () => {
 
   // ACTION 4: Switch Section for Course
   const handleSwitchSection = (courseCode: string, newOfferingId: string) => {
+    if (locked) return;
+    draftDirty.current = true;
     setSelectedOfferingIds(prev => {
       const filtered = prev.filter(id => {
         const off = offeringMap.get(id);
@@ -411,7 +446,7 @@ export const CourseRegistrationView: React.FC = () => {
 
   // ACTION 5: Fix My Schedule (Automatic Conflict Solver)
   const handleFixSchedule = async () => {
-    if (!student || selectedCourseCodes.length === 0) return;
+    if (!student || selectedCourseCodes.length === 0 || locked) return;
     setResolvingConflicts(true);
     setConflictResolutionResult(null);
     try {
@@ -424,6 +459,7 @@ export const CourseRegistrationView: React.FC = () => {
 
       if (res.resolved && res.resolvedOfferings && res.resolvedOfferings.length > 0) {
         const newIds = res.resolvedOfferings.map((o: CourseOffering) => o.id);
+        draftDirty.current = true;
         setSelectedOfferingIds(newIds);
       }
     } catch (err: any) {
@@ -491,7 +527,11 @@ export const CourseRegistrationView: React.FC = () => {
       const res = await api.submitProposedSchedule(student.id, {
         offeringIds: selectedOfferingIds,
         courseCodes: selectedCourseCodes,
+        notes: studentNote.trim() || undefined,
       });
+      if (res.request) setRequest(res.request);
+      draftDirty.current = false;
+      setStudentNote('');
 
       setSubmissionFeedback({
         type: 'SUCCESS',
@@ -504,6 +544,9 @@ export const CourseRegistrationView: React.FC = () => {
       setStudent(updated);
     } catch (err: any) {
       console.error('Submission failed:', err);
+      if (err?.response?.status === 409) {
+        api.getRegistrationRequest(student.id).then(setRequest).catch(() => undefined);
+      }
       setSubmissionFeedback({
         type: 'ERROR',
         messageAr: err?.response?.data?.messageAr || 'فشل إرسال الجدول. يرجى المحاولة مرة أخرى.',
@@ -619,10 +662,18 @@ export const CourseRegistrationView: React.FC = () => {
     {
       id: 'reg-submit',
       label: t('الإرسال للمرشد', 'Send to advisor'),
-      status: pick(language, planStatusLabel[student.currentPlanStatus], student.currentPlanStatus),
-      tone: planStatusTone[student.currentPlanStatus] || 'ink',
+      status: pick(language, requestStatusLabel[request?.status || 'DRAFT'], request?.status || 'DRAFT'),
+      tone: request?.status && request.status !== 'DRAFT' ? requestStatusTone[request.status] : 'ink',
     },
   ];
+  const newStudent = isNewStudent(student);
+  const requestStatus = request?.status || 'DRAFT';
+  const dateText = (iso?: string) =>
+    iso
+      ? new Intl.DateTimeFormat(language === 'ar' ? 'ar-EG-u-nu-latn' : 'en-GB', { timeZone: 'Africa/Cairo', dateStyle: 'long', timeStyle: 'short' }).format(new Date(iso))
+      : '';
+  const recoveryTitle = request ? (language === 'ar' ? request.recoveryTitleAr : request.recoveryTitleEn) : undefined;
+  const recoveryInDraft = selectedCourseCodes.filter(code => recoveryCodes.includes(code));
 
   const stageDot: Record<Tone, string> = {
     ink: 'bg-paper text-ink-500 ring-ink-300',
@@ -693,6 +744,71 @@ export const CourseRegistrationView: React.FC = () => {
         }
       />
 
+      {/* ── Where the timetable is: adopted route / with the advisor / approved / returned ── */}
+      {requestStatus === 'PENDING' && (
+        <div className="callout callout-lane flex-col sm:flex-row sm:items-center" role="status">
+          <Hourglass aria-hidden="true" />
+          <div className="flex-1">
+            <p className="font-bold text-lane-800">{t('جدولك عند المرشد الآن وينتظر قراره', 'Your timetable is with your advisor, waiting for a decision')}</p>
+            <p className="text-lane-700">
+              {t(
+                `أرسلته ${dateText(request?.submittedAt)}${recoveryTitle ? ` وفق خطة تحسين المعدل «${recoveryTitle}»` : ''}. يصلك إشعار فور القرار، ولا يمكن تعديل الجدول حتى ذلك الحين.`,
+                `Sent ${dateText(request?.submittedAt)}${recoveryTitle ? ` following the GPA recovery route “${recoveryTitle}”` : ''}. You will be notified of the decision; the timetable cannot change until then.`
+              )}
+            </p>
+          </div>
+          <Chip tone="lane" icon={Lock}>
+            {t('مقفل للتعديل', 'Locked')}
+          </Chip>
+        </div>
+      )}
+      {requestStatus === 'APPROVED' && (
+        <div className="callout callout-sign flex-col sm:flex-row sm:items-center" role="status">
+          <CheckCircle2 aria-hidden="true" />
+          <div className="flex-1">
+            <p className="font-bold text-sign-800">
+              {t(
+                `اعتمد ${request?.decidedByName || 'المرشد'} جدولك، ومقرراتك مسجلة رسمياً هذا الفصل`,
+                `${request?.decidedByName || 'Your advisor'} approved your timetable; your courses are officially registered this term`
+              )}
+            </p>
+            <p className="text-sign-700">
+              {recoveryTitle
+                ? t(`الجدول يتبع خطة تحسين المعدل «${recoveryTitle}» التي اعتمدتها. `, `It follows the GPA recovery route “${recoveryTitle}” you adopted. `)
+                : ''}
+              {dateText(request?.decidedAt)}
+              {request?.advisorNotes ? t(` — ملاحظة المرشد: «${request.advisorNotes}»`, ` — Advisor note: “${request.advisorNotes}”`) : ''}
+            </p>
+          </div>
+        </div>
+      )}
+      {requestStatus === 'CHANGES_REQUESTED' && (
+        <div className="callout callout-caution flex-col sm:flex-row sm:items-center" role="alert">
+          <AlertTriangle aria-hidden="true" />
+          <div className="flex-1">
+            <p className="font-bold text-caution-800">{t(`${request?.decidedByName || 'المرشد'} طلب تعديل جدولك`, `${request?.decidedByName || 'Your advisor'} asked for changes`)}</p>
+            <p className="text-caution-800">«{request?.advisorNotes}»</p>
+            <p className="text-caution-700">{t('عدّل الجدول بالأسفل ثم أعد إرساله.', 'Change the timetable below, then send it again.')}</p>
+          </div>
+        </div>
+      )}
+      {requestStatus !== 'PENDING' && requestStatus !== 'APPROVED' && recoveryTitle && (
+        <div className="callout callout-sign flex-col sm:flex-row sm:items-center" role="status">
+          <Flag aria-hidden="true" />
+          <div className="flex-1">
+            <p className="font-bold text-sign-800">{t(`اعتمدت خطة تحسين المعدل «${recoveryTitle}»`, `You adopted the GPA recovery route “${recoveryTitle}”`)}</p>
+            <p className="text-sign-700">
+              {recoveryInDraft.length > 0
+                ? t(
+                    `مقرراتها (${recoveryInDraft.join('، ')}) في جدولك أدناه ومعلَّمة بـ«خطة التحسين». راجع الجدول ثم أرسله لمرشدك ليعتمده ويسجلها لك.`,
+                    `Its courses (${recoveryInDraft.join(', ')}) are in your timetable below, marked “Recovery plan”. Review it and send it to your advisor to approve and register them.`
+                  )
+                : t('راجع جدولك ثم أرسله لمرشدك ليعتمده.', 'Review your timetable, then send it to your advisor.')}
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* ── Student strip ─────────────────────────────────────────────── */}
       <Panel padded={false}>
         <div className="grid grid-cols-2 gap-x-6 gap-y-4 p-5 sm:grid-cols-4 sm:p-6 xl:grid-cols-7">
@@ -708,21 +824,40 @@ export const CourseRegistrationView: React.FC = () => {
           />
           <KeyValue
             label={t('المعدل التراكمي', 'Cumulative GPA')}
-            value={<span className={cn('t-num', student.cumulativeGpa < 2 ? 'text-signal-600' : 'text-sign-700')}>{student.cumulativeGpa.toFixed(2)}</span>}
+            value={
+              newStudent ? (
+                <span className="text-ink-500">{t('لا يوجد بعد', 'None yet')}</span>
+              ) : (
+                <span className={cn('t-num', student.cumulativeGpa < 2 ? 'text-signal-600' : 'text-sign-700')}>{student.cumulativeGpa.toFixed(2)}</span>
+              )
+            }
           />
           <KeyValue label={t('الساعات المنجزة', 'Credits completed')} value={<span className="t-num">{student.completedCredits} / 134</span>} />
           <KeyValue label={t('حدك هذا الفصل', 'Your ceiling this term')} value={<span><span className="t-num">{maxAllowedCredits}</span> {t('ساعة', 'cr')}</span>} />
           <KeyValue
-            label={t('حالة الاعتماد', 'Approval status')}
-            value={
-              <span className={chipClass[planStatusTone[student.currentPlanStatus] || 'ink']}>
-                {pick(language, planStatusLabel[student.currentPlanStatus], student.currentPlanStatus)}
-              </span>
-            }
+            label={t('حالة جدولك', 'Your timetable')}
+            value={<span className={chipClass[requestStatusTone[requestStatus] || 'ink']}>{pick(language, requestStatusLabel[requestStatus], requestStatus)}</span>}
           />
         </div>
 
-        {student.cumulativeGpa < 2.0 && (
+        {newStudent && (
+          <div className="border-t border-ink-100 p-4 sm:px-6">
+            <div className="callout callout-lane" role="note">
+              <Sparkles aria-hidden="true" />
+              <div>
+                <p className="font-bold">{t('أهلاً بك في فصلك الأول!', 'Welcome to your first term!')}</p>
+                <p>
+                  {t(
+                    `ليس لديك معدل تراكمي ولا إنذارات بعد. الجدول المقترح بالأسفل مبني على مقررات المستوى الأول وحدك ${maxAllowedCredits} ساعة؛ راجعه ثم أرسله لمرشدك ليعتمده.`,
+                    `You have no GPA and no warnings yet. The suggested timetable below uses the level-1 courses, and your ceiling is ${maxAllowedCredits} credit hours; review it and send it to your advisor.`
+                  )}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isOnWarning(student) && (
           <div className="border-t border-ink-100 p-4 sm:px-6">
             <div className="callout callout-signal" role="note">
               <ShieldAlert aria-hidden="true" />
@@ -746,6 +881,7 @@ export const CourseRegistrationView: React.FC = () => {
       </Panel>
 
       {/* ── Stage line ────────────────────────────────────────────────── */}
+      {!locked && (
       <nav aria-label={t('مراحل التسجيل', 'Registration stages')} className="panel scroll-x px-3 py-4 sm:px-5">
         <ol className="relative grid min-w-[620px] grid-cols-5">
           <span
@@ -775,9 +911,11 @@ export const CourseRegistrationView: React.FC = () => {
           ))}
         </ol>
       </nav>
+      )}
 
+      <fieldset disabled={locked} className="m-0 min-w-0 space-y-6 border-0 p-0">
       {/* ── 1. Suggested timetable ────────────────────────────────────── */}
-      {recommendation && (
+      {recommendation && !locked && (
         <Panel id="reg-suggested" className="scroll-mt-40">
           <PanelHeader
             icon={Signpost}
@@ -896,6 +1034,7 @@ export const CourseRegistrationView: React.FC = () => {
       )}
 
       {/* ── 2. Bylaw checks ───────────────────────────────────────────── */}
+      {!locked && (
       <Panel id="reg-checks" className="scroll-mt-40">
         <PanelHeader
           icon={ShieldCheck}
@@ -1207,21 +1346,32 @@ export const CourseRegistrationView: React.FC = () => {
           </div>
         )}
       </Panel>
+      )}
 
       {/* ── 3. Draft ──────────────────────────────────────────────────── */}
       <Panel id="reg-draft" padded={false} className="scroll-mt-40">
         <div className="flex flex-col gap-4 p-5 sm:p-6 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-[16px] font-bold text-ink-950">{t('مسودة التسجيل', 'Registration draft')}</h2>
-              {selectedOfferings.length > 0 && (
+              <h2 className="text-[16px] font-bold text-ink-950">
+                {requestStatus === 'APPROVED'
+                  ? t('جدولك المعتمد', 'Your approved timetable')
+                  : requestStatus === 'PENDING'
+                  ? t('الجدول المرسل للمرشد', 'Timetable sent to your advisor')
+                  : t('مسودة التسجيل', 'Registration draft')}
+              </h2>
+              {selectedOfferings.length > 0 && !locked && (
                 <Chip tone={isScheduleValid ? 'sign' : 'signal'} icon={isScheduleValid ? CheckCircle2 : AlertCircle}>
                   {isScheduleValid ? t('صالحة للإرسال', 'Ready to send') : t('تحتاج تعديلاً', 'Needs changes')}
                 </Chip>
               )}
             </div>
             <p className="text-[12.5px] text-ink-500">
-              {t('غيّر الشعبة من القائمة، أو احذف مقرراً، أو أضف مقرراً جديداً. الفحص يعمل مع كل تغيير.', 'Switch sections, remove a course or add a new one. Checks run with every change.')}
+              {requestStatus === 'APPROVED'
+                ? t('هذه مقرراتك المسجلة هذا الفصل، وتجدها أيضاً في صفحة «الحضور».', 'These are your registered courses this term; they are on your Attendance page too.')
+                : requestStatus === 'PENDING'
+                ? t('لا يمكن تعديل الجدول وهو عند المرشد.', 'The timetable cannot change while it is with your advisor.')
+                : t('غيّر الشعبة من القائمة، أو احذف مقرراً، أو أضف مقرراً جديداً. الفحص يعمل مع كل تغيير.', 'Switch sections, remove a course or add a new one. Checks run with every change.')}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-4">
@@ -1239,17 +1389,19 @@ export const CourseRegistrationView: React.FC = () => {
               />
               <p className="mt-1 text-[11.5px] text-ink-500">{t(`الحد الأدنى المعتاد ${minCredits} ساعة`, `Usual minimum ${minCredits} cr`)}</p>
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                setAddCourseSearch('');
-                setIsAddCourseModalOpen(true);
-              }}
-              className="btn btn-primary"
-            >
-              <Plus aria-hidden="true" />
-              {t('أضف مقرراً', 'Add a course')}
-            </button>
+            {!locked && (
+              <button
+                type="button"
+                onClick={() => {
+                  setAddCourseSearch('');
+                  setIsAddCourseModalOpen(true);
+                }}
+                className="btn btn-primary"
+              >
+                <Plus aria-hidden="true" />
+                {t('أضف مقرراً', 'Add a course')}
+              </button>
+            )}
           </div>
         </div>
 
@@ -1292,6 +1444,12 @@ export const CourseRegistrationView: React.FC = () => {
                           <div className="min-w-0">
                             <span className="block font-semibold text-ink-900">{courseName(off.courseCode)}</span>
                             {isRetake && <span className="text-[11.5px] font-semibold text-signal-600">{t('إعادة لرفع المعدل', 'Retake to lift your GPA')}</span>}
+                            {recoveryCodes.includes(off.courseCode) && (
+                              <span className="ms-2 inline-flex items-center gap-1 text-[11.5px] font-semibold text-sign-700">
+                                <Flag className="h-3 w-3" aria-hidden="true" />
+                                {t('خطة التحسين', 'Recovery plan')}
+                              </span>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -1438,6 +1596,8 @@ export const CourseRegistrationView: React.FC = () => {
         )}
       </Panel>
 
+      </fieldset>
+
       {/* ── 5. Review & send ──────────────────────────────────────────── */}
       <Panel id="reg-submit" className="scroll-mt-40">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -1460,19 +1620,47 @@ export const CourseRegistrationView: React.FC = () => {
               <Printer aria-hidden="true" />
               {t('معاينة الاستمارة', 'Preview the slip')}
             </button>
-            <button
-              type="button"
-              onClick={handleSubmitProposedSchedule}
-              disabled={isSubmitting || !isScheduleValid || selectedOfferings.length === 0}
-              className="btn btn-primary btn-lg"
-            >
-              <Send aria-hidden="true" className="rtl:-scale-x-100" />
-              {isSubmitting ? t('جارٍ الإرسال…', 'Sending…') : t('أرسل الجدول للمرشد', 'Send timetable to advisor')}
-            </button>
+            {locked ? (
+              <span className={cn(chipClass[requestStatusTone[requestStatus]], '!h-10 !px-4 !text-[13.5px]')}>
+                {requestStatus === 'APPROVED' ? <CheckCircle2 aria-hidden="true" /> : <Hourglass aria-hidden="true" />}
+                {pick(language, requestStatusLabel[requestStatus], requestStatus)}
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={handleSubmitProposedSchedule}
+                disabled={isSubmitting || !isScheduleValid || selectedOfferings.length === 0}
+                className="btn btn-primary btn-lg"
+              >
+                <Send aria-hidden="true" className="rtl:-scale-x-100" />
+                {isSubmitting
+                  ? t('جارٍ الإرسال…', 'Sending…')
+                  : requestStatus === 'CHANGES_REQUESTED'
+                  ? t('أعد إرسال الجدول بعد التعديل', 'Send the changed timetable')
+                  : t('أرسل الجدول للمرشد', 'Send timetable to advisor')}
+              </button>
+            )}
           </div>
         </div>
 
-        {!isScheduleValid && selectedOfferings.length > 0 && (
+        {!locked && (
+          <div className="mt-4">
+            <label htmlFor="reg-student-note" className="field-label">
+              {t('ملاحظة لمرشدك (اختياري)', 'A note for your advisor (optional)')}
+            </label>
+            <textarea
+              id="reg-student-note"
+              rows={2}
+              maxLength={500}
+              value={studentNote}
+              onChange={e => setStudentNote(e.target.value)}
+              placeholder={t('مثلاً: أفضّل الشعبة الصباحية لأني أعمل بعد الظهر.', 'For example: I prefer the morning section because I work in the afternoon.')}
+              className="field"
+            />
+          </div>
+        )}
+
+        {!locked && !isScheduleValid && selectedOfferings.length > 0 && (
           <p className="mt-3 text-[12.5px] font-medium text-signal-600">
             {t('زر الإرسال يعمل بعد حل مشكلات فحص اللائحة.', 'Sending is available once the bylaw check issues are fixed.')}
           </p>
@@ -1826,7 +2014,7 @@ export const CourseRegistrationView: React.FC = () => {
               </div>
               <div className="kv">
                 <dt>{t('المعدل التراكمي', 'Cumulative GPA')}</dt>
-                <dd className="t-num">{student.cumulativeGpa.toFixed(2)}</dd>
+                <dd className="t-num">{newStudent ? '—' : student.cumulativeGpa.toFixed(2)}</dd>
               </div>
               <div className="kv col-span-2">
                 <dt>{t('المرشد الأكاديمي', 'Academic advisor')}</dt>
@@ -1840,7 +2028,7 @@ export const CourseRegistrationView: React.FC = () => {
               </div>
               <div className="kv">
                 <dt>{t('حالة الاعتماد', 'Approval')}</dt>
-                <dd>{pick(language, planStatusLabel[student.currentPlanStatus], student.currentPlanStatus)}</dd>
+                <dd>{pick(language, requestStatusLabel[requestStatus], requestStatus)}</dd>
               </div>
             </dl>
 

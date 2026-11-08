@@ -8,6 +8,10 @@ export class StudentRepository {
    * Helper to map Prisma Student + User + Records to Application Student domain model
    */
   public static mapToDomain(row: any): Student {
+    // Term names of older records come from the demo data (the database keeps a term only through a section).
+    const memRecords = INITIAL_STUDENTS.find(s => s.id === row.id || s.studentCode === row.studentCode)?.records || [];
+    const termOf = (r: any) =>
+      memRecords.find(m => m.courseCode === (r.course?.code || r.courseCode) && m.attempt === (r.attempt || 1));
     const records: StudentCourseRecord[] = (row.records || []).map((r: any) => ({
       courseCode: r.course?.code || r.courseCode || '',
       courseNameAr: r.course?.nameAr || '',
@@ -16,13 +20,14 @@ export class StudentRepository {
       grade: r.grade || undefined,
       gradePoints: r.gradePoints ?? undefined,
       status: r.status as 'PASSED' | 'FAILED' | 'ENROLLED' | 'IN_PROGRESS',
-      semesterId: r.offering?.semesterId || 'sem_fall_2026',
-      semesterName: r.offering?.semester?.nameAr || 'خريف 2026',
+      semesterId: r.offering?.semesterId || termOf(r)?.semesterId || 'sem_fall_2026',
+      semesterName: r.offering?.semester?.nameAr || termOf(r)?.semesterName || 'خريف 2026',
       attempt: r.attempt || 1,
       attendancePercentage: r.attendancePercentage ?? 100,
       courseworkMark: r.courseworkMark ?? undefined,
       finalMark: r.finalMark ?? undefined,
       totalMark: r.totalMark ?? undefined,
+      offeringId: r.offeringId || undefined,
     }));
 
     // Find latest study plan if any

@@ -14,6 +14,7 @@ enum Role {
   STUDENT
   PROCESS_OFFICER
   DEPARTMENT_HEAD
+  TEACHING_ASSISTANT
 }
 
 enum RiskLevel {
@@ -87,6 +88,8 @@ model Student {
   studyPlans          StudyPlan[]
   trainings           SummerTraining[]
   graduationProjects  GraduationProject[]
+  registrationRequests RegistrationRequest[]
+  attendanceMarks     AttendanceMark[]
 
   createdAt           DateTime           @default(now())
   updatedAt           DateTime           @updatedAt
@@ -112,7 +115,9 @@ model Instructor {
   userId     String            @unique
   user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   department String
-  offerings  CourseOffering[]
+  offerings  CourseOffering[]  @relation("OfferingInstructor")
+  // Sections where this person is the teaching assistant (معيد)
+  assisting  CourseOffering[]  @relation("OfferingAssistant")
 
   createdAt  DateTime          @default(now())
   updatedAt  DateTime          @updatedAt
@@ -176,7 +181,10 @@ model CourseOffering {
   semesterId     String
   semester       Semester       @relation(fields: [semesterId], references: [id], onDelete: Cascade)
   instructorId   String
-  instructor     Instructor     @relation(fields: [instructorId], references: [id], onDelete: Cascade)
+  instructor     Instructor     @relation("OfferingInstructor", fields: [instructorId], references: [id], onDelete: Cascade)
+  // Teaching assistant (معيد) who also takes attendance for this section
+  assistantId    String?
+  assistant      Instructor?    @relation("OfferingAssistant", fields: [assistantId], references: [id], onDelete: SetNull)
   capacity       Int            @default(50)
   enrolledCount  Int            @default(0)
   scheduleAr     String
@@ -184,6 +192,7 @@ model CourseOffering {
   hall           String
 
   records        CourseRecord[]
+  attendanceSessions AttendanceSession[]
 
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
@@ -313,4 +322,63 @@ model Notification {
   createdAt   DateTime @default(now())
 
   @@index([recipientId, read])
+}
+
+// A student's semester registration: the sections they picked (and the GPA
+// recovery route they adopted), sent to the advisor, who approves it or asks
+// for changes. Approval registers the courses.
+model RegistrationRequest {
+  id               String    @id @default(uuid())
+  studentId        String
+  student          Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  semesterId       String?
+  status           String    @default("DRAFT") // DRAFT | PENDING | APPROVED | CHANGES_REQUESTED
+  offeringIdsJson  String    @default("[]")
+  recoveryStrategy String?
+  recoveryTitleAr  String?
+  recoveryTitleEn  String?
+  studentNotes     String?
+  advisorNotes     String?
+  decidedById      String?
+  decidedByName    String?
+  submittedAt      DateTime?
+  decidedAt        DateTime?
+
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([studentId])
+  @@index([status])
+}
+
+// One lecture or section where attendance is taken (by QR code or by hand).
+model AttendanceSession {
+  id            String           @id @default(uuid())
+  offeringId    String
+  offering      CourseOffering   @relation(fields: [offeringId], references: [id], onDelete: Cascade)
+  kind          String           @default("LECTURE") // LECTURE | SECTION
+  status        String           @default("OPEN")    // OPEN | CLOSED
+  secret        String           // signs the rotating QR token and code
+  startedAt     DateTime         @default(now())
+  endedAt       DateTime?
+  startedById   String
+  startedByName String
+  marks         AttendanceMark[]
+
+  @@index([offeringId])
+}
+
+model AttendanceMark {
+  id         String            @id @default(uuid())
+  sessionId  String
+  session    AttendanceSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  studentId  String
+  student    Student           @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  status     String            // PRESENT | LATE | ABSENT | EXCUSED
+  method     String            // QR | CODE | MANUAL | AUTO
+  markedAt   DateTime          @default(now())
+  markedById String?
+
+  @@unique([sessionId, studentId])
+  @@index([studentId])
 }
