@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import { createRequire } from 'module';
 import { prisma } from './prisma.js';
+import { directDatabaseUrl, normalizeDatabaseUrl } from './databaseUrl.js';
 import { INITIAL_ACADEMIC_RULES } from '../data/store.js';
 
 const require = createRequire(import.meta.url);
@@ -26,8 +27,10 @@ export function pushSchema(timeoutMs = PUSH_TIMEOUT_MS): Promise<void> {
       reject(err);
       return;
     }
+    const env: NodeJS.ProcessEnv = { ...process.env, CHECKPOINT_DISABLE: '1', PRISMA_HIDE_UPDATE_MESSAGE: '1' };
+    if (process.env.DATABASE_URL) env.DATABASE_URL = directDatabaseUrl(normalizeDatabaseUrl(process.env.DATABASE_URL));
     const child = spawn(process.execPath, [cli, 'db', 'push', '--skip-generate'], {
-      env: { ...process.env, CHECKPOINT_DISABLE: '1', PRISMA_HIDE_UPDATE_MESSAGE: '1' },
+      env,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });

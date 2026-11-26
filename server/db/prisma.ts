@@ -1,11 +1,12 @@
 import { PrismaClient } from '@prisma/client';
+import { normalizeDatabaseUrl } from './databaseUrl.js';
 
 declare global {
   // eslint-disable-next-line no-var
   var prismaGlobal: PrismaClient | undefined;
 }
 
-let rawUrl = process.env.DATABASE_URL || 'postgresql://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable';
+let rawUrl = normalizeDatabaseUrl(process.env.DATABASE_URL) || 'postgresql://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable';
 if (!rawUrl.includes('pgbouncer=true')) {
   rawUrl += (rawUrl.includes('?') ? '&' : '?') + 'pgbouncer=true';
 }
