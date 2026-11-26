@@ -5,6 +5,7 @@ import { api } from '../../services/api.js';
 import { Student, PlanStatus } from '../../types/index.js';
 import { TranscriptReportModal } from '../reports/TranscriptReportModal.js';
 import { AdvisorReviewView } from './AdvisorReviewView.js';
+import { RegistrationCenter } from '../registration/RegistrationCenter.js';
 import {
   PageHeader,
   Panel,
@@ -49,9 +50,12 @@ interface AdvisorDashboardProps {
   onNavigateTab?: (tab: string) => void;
 }
 
-const mapAdvisorTab = (tab?: string): 'TRIAGE' | 'PLANS' | 'STUDENTS' => {
+type AdvisorTab = 'TRIAGE' | 'PLANS' | 'REGISTRATION' | 'STUDENTS';
+
+const mapAdvisorTab = (tab?: string): AdvisorTab => {
   if (tab === 'advisor-plans') return 'PLANS';
   if (tab === 'advisor-students') return 'STUDENTS';
+  if (tab === 'advisor-registration') return 'REGISTRATION';
   return 'TRIAGE';
 };
 
@@ -88,7 +92,7 @@ const RiskBar: React.FC<{ level: string }> = ({ level }) => (
 export const AdvisorDashboard: React.FC<AdvisorDashboardProps> = ({ currentTab, onNavigateTab }) => {
   const { currentUser } = useAuth();
   const { t, language } = useLanguage();
-  const [activeTab, setActiveTab] = useState<'TRIAGE' | 'PLANS' | 'STUDENTS'>(() => mapAdvisorTab(currentTab));
+  const [activeTab, setActiveTab] = useState<AdvisorTab>(() => mapAdvisorTab(currentTab));
 
   useEffect(() => {
     if (currentTab) {
@@ -96,11 +100,12 @@ export const AdvisorDashboard: React.FC<AdvisorDashboardProps> = ({ currentTab, 
     }
   }, [currentTab]);
 
-  const handleSelectTab = (tab: 'TRIAGE' | 'PLANS' | 'STUDENTS') => {
+  const handleSelectTab = (tab: AdvisorTab) => {
     setActiveTab(tab);
     if (onNavigateTab) {
       if (tab === 'PLANS') onNavigateTab('advisor-plans');
       else if (tab === 'STUDENTS') onNavigateTab('advisor-students');
+      else if (tab === 'REGISTRATION') onNavigateTab('advisor-registration');
       else onNavigateTab('advisor-dashboard');
     }
   };
@@ -476,6 +481,13 @@ export const AdvisorDashboard: React.FC<AdvisorDashboardProps> = ({ currentTab, 
             setStudents(prev => prev.map(s => (s.id === studentId ? { ...s, currentPlanStatus: status } : s)));
           }}
         />
+      )}
+
+      {/* ===================================================== */}
+      {/* REGISTRATION — who has registered, who has not          */}
+      {/* ===================================================== */}
+      {activeTab === 'REGISTRATION' && (
+        <RegistrationCenter mode={currentUser?.role === 'ADMIN' ? 'admin' : 'advisor'} onOpenApprovals={() => handleSelectTab('PLANS')} />
       )}
 
       {/* ===================================================== */}

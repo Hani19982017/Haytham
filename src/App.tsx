@@ -30,6 +30,7 @@ import { ProcessOfficerRecordsView } from './components/process/ProcessOfficerRe
 import { StudentAttendanceView } from './components/student/StudentAttendanceView.js';
 import { AttendCheckInView } from './components/student/AttendCheckInView.js';
 import { StaffAttendanceView } from './components/attendance/StaffAttendanceView.js';
+import { RegistrationCenter } from './components/registration/RegistrationCenter.js';
 import { roleHome } from './components/common/navigation.js';
 
 // Helper to map URL pathname to sidebar tab
@@ -47,6 +48,7 @@ const getTabFromPath = (pathname: string): string => {
   if (p === 'advisor' || p === 'advisor/dashboard') return 'advisor-dashboard';
   if (p === 'advisor/plans') return 'advisor-plans';
   if (p === 'advisor/students') return 'advisor-students';
+  if (p === 'advisor/registration') return 'advisor-registration';
 
   if (p === 'instructor' || p === 'instructor/grades') return 'instructor-grades';
   if (p === 'instructor/attendance') return 'instructor-attendance';
@@ -60,12 +62,15 @@ const getTabFromPath = (pathname: string): string => {
   if (p === 'admin/rules') return 'admin-rules';
   if (p === 'admin/import') return 'admin-import';
   if (p === 'admin/audit') return 'admin-audit';
+  if (p === 'admin/registration') return 'admin-registration';
+  if (p === 'admin/equivalency') return 'admin-equivalency';
 
   if (p === 'department' || p === 'department/analytics') return 'head-analytics';
   if (p === 'department/hotspots') return 'head-hotspots';
   if (p === 'department/seats') return 'head-seats';
 
   if (p === 'process' || p === 'process/records') return 'process-records';
+  if (p === 'process/registration') return 'process-registration';
 
   return 'student-dashboard';
 };
@@ -96,6 +101,8 @@ const getPathFromTab = (tab: string): string => {
       return '/advisor/plans';
     case 'advisor-students':
       return '/advisor/students';
+    case 'advisor-registration':
+      return '/advisor/registration';
 
     case 'instructor-grades':
       return '/instructor/grades';
@@ -119,6 +126,10 @@ const getPathFromTab = (tab: string): string => {
       return '/admin/import';
     case 'admin-audit':
       return '/admin/audit';
+    case 'admin-registration':
+      return '/admin/registration';
+    case 'admin-equivalency':
+      return '/admin/equivalency';
 
     case 'head-analytics':
       return '/department/analytics';
@@ -129,6 +140,8 @@ const getPathFromTab = (tab: string): string => {
 
     case 'process-records':
       return '/process/records';
+    case 'process-registration':
+      return '/process/registration';
 
     default:
       return '/student/dashboard';
@@ -230,7 +243,7 @@ const DashboardLayout: React.FC = () => {
               path="/process/*"
               element={
                 <ProtectedRoute allowedRoles={['PROCESS_OFFICER', 'ADMIN']}>
-                  <ProcessOfficerRecordsView />
+                  {currentTab === 'process-registration' ? <RegistrationCenter mode="readonly" /> : <ProcessOfficerRecordsView />}
                 </ProtectedRoute>
               }
             />

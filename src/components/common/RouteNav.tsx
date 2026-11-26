@@ -37,7 +37,7 @@ export const RouteNav: React.FC<RouteNavProps> = ({ currentTab, onSelectTab }) =
           )}
           <ol className="relative flex">
           {stations.map(station => {
-            const active = station.id === currentTab;
+            const active = station.id === currentTab || !!station.aliases?.includes(currentTab);
             return (
               <li key={station.id} className="flex min-w-[104px] flex-1 justify-center">
                 <button

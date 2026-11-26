@@ -31,11 +31,16 @@ import { AcademicRuleRepository } from '../repositories/academicRuleRepository.j
 import { AuditLogRepository } from '../repositories/auditLogRepository.js';
 import { NotificationRepository } from '../repositories/notificationRepository.js';
 import { StudyPlanRepository } from '../repositories/studyPlanRepository.js';
-import { AcademicTransactionService } from '../services/academicTransactionService.js';
+import { AcademicTransactionService, GradeValidationError } from '../services/academicTransactionService.js';
 import { RegistrationAdvisorEngine } from '../engines/registrationAdvisorEngine.js';
 import { INITIAL_STUDENTS } from '../data/store.js';
 import { createAttendanceRouter } from './attendance.js';
 import { RegistrationRequestRepository } from '../repositories/registrationRequestRepository.js';
+import { createRegistrationRouter } from './registration.js';
+import { createEquivalencyRouter } from './equivalency.js';
+import { createTrainingRouter, proofUpload } from './training.js';
+import { RegistrationCenterService } from '../services/registrationCenterService.js';
+import { TrainingService } from '../services/trainingService.js';
 
 export const apiRouter = Router();
 
@@ -155,40 +160,47 @@ async function addAuditLog(
 // Display name without the demo-account label, e.g. "عمر فاروق (طالب - تحت الإنذار)" → "عمر فاروق".
 const plainName = (raw?: string) => (raw || '').split('(')[0].trim() || raw || '';
 
-// Security: Resolve calling user from headers
+// Security: the caller is whoever the signed access token (JWT) says. A user id
+// header or anything else in the request is never trusted on its own.
 function getCaller(req: Request): any {
-  const userIdHeader = req.headers['x-user-id'] as string;
-  if (userIdHeader) {
-    const found = USERS.find(u => u.id === userIdHeader || u.email === userIdHeader || u.studentId === userIdHeader);
-    if (found) return found;
-  }
   const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.substring(7);
-    try {
-      const decoded = UniversityAuthService.verifyAccessToken(token);
-      if (decoded && (decoded.sub || decoded.email)) {
-        const match = USERS.find(u => u.id === decoded.sub || u.email === decoded.email);
-        if (match) return match;
-        return {
-          id: decoded.sub || 'user_unknown',
-          email: decoded.email || '',
-          nameAr: decoded.nameAr || decoded.email || 'مستخدم معتمد',
-          nameEn: decoded.nameEn || decoded.email || 'Authenticated User',
-          role: decoded.role || 'STUDENT',
-          studentId: decoded.studentId,
-          advisorId: decoded.advisorId,
-          instructorId: decoded.instructorId,
-        };
-      }
-    } catch {
-      // ignore decoding error and fall through
-    }
-    const match = USERS.find(u => token.includes(u.id));
-    if (match) return match;
-  }
-  return null;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
+  const decoded = UniversityAuthService.verifyAccessToken(authHeader.substring(7));
+  if (!decoded || !(decoded.sub || decoded.email)) return null;
+  const match = USERS.find(u => u.id === decoded.sub || u.email === decoded.email);
+  if (match) return match;
+  return {
+    id: decoded.sub || 'user_unknown',
+    email: decoded.email || '',
+    nameAr: decoded.nameAr || decoded.email || 'مستخدم معتمد',
+    nameEn: decoded.nameEn || decoded.email || 'Authenticated User',
+    role: decoded.role || 'STUDENT',
+    studentId: decoded.studentId,
+    advisorId: decoded.advisorId,
+    instructorId: decoded.instructorId,
+  };
 }
+
+/** Users as the admin pages see them (never their password hashes). */
+const withoutSecrets = <T extends { passwordHash?: string }>(users: T[]) => users.map(({ passwordHash: _hidden, ...rest }) => rest);
+
+// Every API call needs a signed-in user, except signing in itself, the health
+// checks and the public transcript verification (opened from a printed QR code).
+const PUBLIC_API: { method: string; path: RegExp }[] = [
+  { method: 'POST', path: /^\/auth\/(login|refresh|logout)\/?$/ },
+  { method: 'GET', path: /^\/auth\/me\/?$/ },
+  { method: 'GET', path: /^\/(health|ready)\/?$/ },
+  { method: 'GET', path: /^\/reports\/verify\/[^/]+\/?$/ },
+  { method: 'GET', path: /^\/docs\/openapi\.json$/ },
+];
+apiRouter.use((req: Request, res: Response, next) => {
+  if (req.method === 'OPTIONS') return next();
+  if (PUBLIC_API.some(p => p.method === req.method && p.path.test(req.path))) return next();
+  if (!getCaller(req)) {
+    return res.status(401).json({ error: 'UNAUTHORIZED', messageAr: 'غير مصرح: يرجى تسجيل الدخول.', messageEn: 'Unauthorized: please sign in.' });
+  }
+  next();
+});
 
 // Global RBAC middleware: Enforce Process Officer read-only policy.
 // Signing in/out and marking one's own notifications as read are not data changes.
@@ -207,6 +219,15 @@ apiRouter.use((req: Request, res: Response, next) => {
 
 // QR / manual attendance (instructors, teaching assistants and students)
 apiRouter.use('/attendance', createAttendanceRouter(getCaller));
+
+// Registration follow-up, section lists, Excel sheets and registering for a student
+apiRouter.use('/registration', createRegistrationRouter(getCaller));
+
+// Transfer students: equivalency (موازنة) of the courses studied elsewhere
+apiRouter.use('/equivalency', createEquivalencyRouter(getCaller));
+
+// Summer training with an uploaded proof, reviewed by the advisor
+apiRouter.use('/training', createTrainingRouter(getCaller));
 
 // -------------------------------------------------------------
 // 1. AUTHENTICATION & IDENTITY (Enterprise Credentials + JWT)
@@ -245,38 +266,11 @@ apiRouter.post('/auth/login', async (req: Request, res: Response) => {
       });
     }
 
-    // Demo/Development fallback path
-    const user = USERS.find(u => u.email.toLowerCase() === (email || '').toLowerCase()) || USERS[3];
-    const tokens = UniversityAuthService.generateTokens({
-      ...user,
-      passwordHash: '',
-      isActive: true,
-      failedLoginAttempts: 0,
-    });
-
-    await addAuditLog(
-      user.id,
-      user.nameAr,
-      user.role,
-      'LOGIN',
-      'UserSession',
-      user.id,
-      `تسجيل دخول للمستخدم (${user.nameAr}) بدور (${user.role}).`,
-      `Login for user (${user.nameEn}) with role (${user.role}).`
-    );
-
-    res.cookie('refreshToken', tokens.refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
-
-    return res.json({
-      token: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
-      expiresIn: tokens.expiresIn,
-      user,
+    // A password is always required.
+    return res.status(400).json({
+      error: 'PASSWORD_REQUIRED',
+      messageAr: 'اكتب كلمة المرور.',
+      messageEn: 'The password is required.',
     });
   } catch (err: any) {
     return res.status(401).json({
@@ -298,7 +292,7 @@ apiRouter.post('/auth/refresh', async (req: Request, res: Response) => {
   }
 
   try {
-    const tokens = UniversityAuthService.refreshTokens(refreshToken);
+    const tokens = await UniversityAuthService.refreshTokens(refreshToken);
     res.cookie('refreshToken', tokens.refreshToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
@@ -372,10 +366,14 @@ apiRouter.post('/auth/password-reset', async (req: Request, res: Response) => {
 });
 
 apiRouter.get('/auth/users', async (req: Request, res: Response) => {
+  const caller = getCaller(req);
+  if (!caller || caller.role !== 'ADMIN') {
+    return res.status(403).json({ error: 'ROLE_FORBIDDEN', messageAr: 'قائمة الحسابات لمدير النظام فقط.', messageEn: 'The account list is for the administrator.' });
+  }
   try {
     const dbUsers = await UserRepository.listAll();
     if (dbUsers.length > 0) {
-      return res.json(dbUsers);
+      return res.json(withoutSecrets(dbUsers));
     }
   } catch (err) {
     console.warn('[UserRepository] Falling back to default identity list:', err);
@@ -385,12 +383,14 @@ apiRouter.get('/auth/users', async (req: Request, res: Response) => {
 
 // Full RESTful Users management for Admin
 apiRouter.get('/users', async (req: Request, res: Response) => {
+  const caller = getCaller(req);
+  if (!caller || !['ADMIN', 'DEPARTMENT_HEAD'].includes(caller.role)) {
+    return res.status(403).json({ error: 'ROLE_FORBIDDEN', messageAr: 'إدارة الحسابات لمدير النظام فقط.', messageEn: 'Account management is for the administrator.' });
+  }
   try {
-    const caller = getCaller(req);
-    // Allow admin, advisors, department heads to view users directory
     const dbUsers = await UserRepository.listAll();
     if (dbUsers.length > 0) {
-      return res.json(dbUsers);
+      return res.json(withoutSecrets(dbUsers));
     }
     return res.json(USERS);
   } catch (err: any) {
@@ -401,7 +401,7 @@ apiRouter.get('/users', async (req: Request, res: Response) => {
 apiRouter.post('/users', async (req: Request, res: Response) => {
   try {
     const caller = getCaller(req);
-    if (caller && caller.role !== 'ADMIN') {
+    if (!caller || caller.role !== 'ADMIN') {
       return res.status(403).json({
         error: 'ROLE_FORBIDDEN',
         messageAr: 'غير مصرح: إضافة المستخدمين تقتصر على الآدمن فقط.',
@@ -466,9 +466,16 @@ apiRouter.post('/users', async (req: Request, res: Response) => {
       { id: newUser.id, email: newUser.email, role: newUser.role, nameAr: newUser.nameAr }
     );
 
+    // A new student starts in level 1: the bylaw's first-term courses are registered for them now.
+    const autoRegistration = newUser.role === 'STUDENT' && newUser.studentId
+      ? await RegistrationCenterService.autoRegisterFreshman(newUser.studentId).catch(() => undefined)
+      : undefined;
+
+    const { passwordHash: _hidden, ...safeUser } = newUser;
     return res.status(201).json({
       success: true,
-      user: newUser,
+      user: safeUser,
+      ...(autoRegistration && autoRegistration.status !== 'SKIPPED' ? { autoRegistration } : {}),
       messageAr: 'تم إنشاء المستخدم وحفظه وتشفير كلمة المرور بنجاح.',
       messageEn: 'User created and password securely hashed with Bcrypt.',
     });
@@ -481,7 +488,7 @@ apiRouter.post('/users', async (req: Request, res: Response) => {
 apiRouter.put('/users/:id', async (req: Request, res: Response) => {
   try {
     const caller = getCaller(req);
-    if (caller && caller.role !== 'ADMIN') {
+    if (!caller || caller.role !== 'ADMIN') {
       return res.status(403).json({
         error: 'ROLE_FORBIDDEN',
         messageAr: 'غير مصرح: تعديل بيانات المستخدمين تقتصر على الآدمن فقط.',
@@ -544,7 +551,7 @@ apiRouter.put('/users/:id', async (req: Request, res: Response) => {
 apiRouter.delete('/users/:id', async (req: Request, res: Response) => {
   try {
     const caller = getCaller(req);
-    if (caller && caller.role !== 'ADMIN') {
+    if (!caller || caller.role !== 'ADMIN') {
       return res.status(403).json({
         error: 'ROLE_FORBIDDEN',
         messageAr: 'غير مصرح: حذف المستخدمين يقتصر على الآدمن فقط.',
@@ -595,7 +602,7 @@ apiRouter.delete('/users/:id', async (req: Request, res: Response) => {
 apiRouter.post('/users/:id/reset-password', async (req: Request, res: Response) => {
   try {
     const caller = getCaller(req);
-    if (caller && caller.role !== 'ADMIN') {
+    if (!caller || caller.role !== 'ADMIN') {
       return res.status(403).json({
         error: 'ROLE_FORBIDDEN',
         messageAr: 'غير مصرح: إعادة تعيين كلمات المرور تقتصر على الآدمن.',
@@ -655,7 +662,7 @@ apiRouter.get('/courses', async (req: Request, res: Response) => {
 
 apiRouter.post('/courses', async (req: Request, res: Response) => {
   const caller = getCaller(req);
-  if (caller && caller.role !== 'ADMIN') {
+  if (!caller || caller.role !== 'ADMIN') {
     return res.status(403).json({
       error: 'ROLE_FORBIDDEN',
       messageAr: 'غير مصرح: تعديل بيانات المقررات مقتصر على مدير النظام.',
@@ -712,7 +719,7 @@ apiRouter.get('/offerings', async (req: Request, res: Response) => {
 
 apiRouter.post('/offerings/:id/capacity', async (req: Request, res: Response) => {
   const caller = getCaller(req);
-  if (caller && caller.role !== 'ADMIN') {
+  if (!caller || caller.role !== 'ADMIN') {
     return res.status(403).json({
       error: 'ROLE_FORBIDDEN',
       messageAr: 'غير مصرح: تعديل سعة الشعب مقتصر على مدير النظام.',
@@ -762,6 +769,12 @@ apiRouter.get('/students', async (req: Request, res: Response) => {
       track: track ? String(track) : undefined,
       search: search ? String(search) : undefined,
     });
+
+    // A student only ever sees their own record here.
+    const caller = getCaller(req);
+    if (caller?.role === 'STUDENT') {
+      filtered = filtered.filter(st => st.id === caller.studentId || st.email === caller.email);
+    }
 
     // Recalculate dynamic risk on read
     filtered = filtered.map(st => {
@@ -999,11 +1012,20 @@ apiRouter.post('/students/:id/what-if', async (req: Request, res: Response) => {
 // Course Registration Validation & Submission (Real PostgreSQL Transaction)
 apiRouter.post('/students/:id/register', async (req: Request, res: Response) => {
   const caller = getCaller(req);
-  if (caller && caller.role === 'STUDENT' && caller.studentId && caller.studentId !== req.params.id) {
+  if (caller?.role === 'STUDENT') {
     return res.status(403).json({
-      error: 'IDOR_FORBIDDEN',
-      messageAr: 'غير مصرح: لا يمكنك تسجيل مقررات لطالب آخر.',
-      messageEn: 'Unauthorized: Students cannot register courses for other students.',
+      error: 'USE_ADVISOR_APPROVAL',
+      messageAr: 'يسجّل الطالب مقرراته بإرسال جدوله لمرشده من صفحة «التسجيل»، ويعتمده المرشد.',
+      messageEn: 'Students register by sending their timetable to their advisor on the Registration page.',
+    });
+  }
+  const target = await StudentRepository.findExact(req.params.id);
+  if (!target) return res.status(404).json({ error: 'Student not found' });
+  if (!(caller?.role === 'ADMIN' || (caller?.role === 'ACADEMIC_ADVISOR' && caller.advisorId && caller.advisorId === target.advisorId))) {
+    return res.status(403).json({
+      error: 'ROLE_FORBIDDEN',
+      messageAr: 'التسجيل للطالب لمرشده أو لمدير النظام.',
+      messageEn: 'Only the student’s advisor or the administrator can register for them.',
     });
   }
 
@@ -1189,6 +1211,8 @@ apiRouter.post('/students/:id/submit-proposed-schedule', async (req: Request, re
   try {
     const student = await studentForCaller(req, res, true);
     if (!student) return;
+    if (blockFreshmanSelfService(caller, student, res)) return;
+    if (blockDismissed(caller, student, res)) return;
 
     const { offeringIds, courseCodes, notes } = req.body;
     const allCourses = await CourseRepository.getAll();
@@ -1307,6 +1331,33 @@ function pickSections(codes: string[], offerings: CourseOffering[], alreadyTaken
 }
 
 /**
+ * A first-term student does not build a schedule: the bylaw's first-term courses
+ * are registered for them automatically, and changes go through the advisor.
+ * Sends the reply and returns true when the caller is such a student.
+ */
+function blockFreshmanSelfService(caller: any, student: Student, res: Response): boolean {
+  if (caller?.role !== 'STUDENT' || !AcademicRulesEngine.isFreshman(student)) return false;
+  res.status(403).json({
+    error: 'FIRST_TERM_AUTOMATIC',
+    messageAr: 'مقررات الفصل الأول تُسجَّل للطالب المستجد تلقائياً حسب اللائحة، فلا تحتاج إلى اختيارها. لأي تعديل تواصل مع مرشدك.',
+    messageEn: 'First-term courses are registered for new students automatically per the bylaw, so you do not choose them. Ask your advisor for any change.',
+  });
+  return true;
+}
+
+/** A student at the dismissal limit (4 consecutive or 6 separate warnings) needs an administrator exception to register. */
+function blockDismissed(caller: any, student: Student, res: Response): boolean {
+  if (caller?.role === 'ADMIN') return false;
+  if (!AcademicRulesEngine.dismissalReached(student) || AcademicRulesEngine.finalChanceEligible(student)) return false;
+  res.status(403).json({
+    error: 'DISMISSAL_LIMIT',
+    messageAr: `بلغ الطالب حد الفصل (${student.consecutiveWarnings} إنذارات متتالية، ${student.warningCount} إجمالاً؛ الحد ${AcademicRulesEngine.DISMISSAL_CONSECUTIVE_WARNINGS} متتالية أو ${AcademicRulesEngine.DISMISSAL_TOTAL_WARNINGS} منفصلة). التسجيل يحتاج استثناءً من مدير النظام.`,
+    messageEn: `The student reached the dismissal limit (${student.consecutiveWarnings} consecutive, ${student.warningCount} in all; limit ${AcademicRulesEngine.DISMISSAL_CONSECUTIVE_WARNINGS} consecutive or ${AcademicRulesEngine.DISMISSAL_TOTAL_WARNINGS} separate). Registering needs an administrator exception.`,
+  });
+  return true;
+}
+
+/**
  * The student the caller may act for. Students only for themselves; for changes
  * (`write`), otherwise only the student's advisor or an administrator.
  */
@@ -1342,7 +1393,16 @@ apiRouter.get('/students/:id/registration-request', async (req: Request, res: Re
   try {
     const student = await studentForCaller(req, res);
     if (!student) return;
-    return res.json({ request: await RegistrationRequestRepository.current(student.id) });
+    // A first-term student's courses are registered automatically (if that has not happened yet).
+    let autoRegistration: Awaited<ReturnType<typeof RegistrationCenterService.autoRegisterFreshman>> | undefined;
+    if (AcademicRulesEngine.isFreshman(student) && !student.records.some(r => r.status === 'IN_PROGRESS' || r.status === 'ENROLLED')) {
+      autoRegistration = await RegistrationCenterService.autoRegisterFreshman(student.id).catch(() => undefined);
+    }
+    return res.json({
+      request: await RegistrationRequestRepository.current(student.id),
+      firstTermAutomatic: AcademicRulesEngine.isFreshman(student),
+      ...(autoRegistration && autoRegistration.status !== 'SKIPPED' ? { autoRegistration } : {}),
+    });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -1353,6 +1413,7 @@ apiRouter.put('/students/:id/registration-request', async (req: Request, res: Re
   try {
     const student = await studentForCaller(req, res, true);
     if (!student) return;
+    if (blockFreshmanSelfService(getCaller(req), student, res)) return;
     const current = await RegistrationRequestRepository.current(student.id);
     if (current?.status === 'PENDING' || current?.status === 'APPROVED') {
       return res.status(409).json({
@@ -1379,6 +1440,7 @@ apiRouter.post('/students/:id/recovery-plan/adopt', async (req: Request, res: Re
   try {
     const student = await studentForCaller(req, res, true);
     if (!student) return;
+    if (blockFreshmanSelfService(caller, student, res)) return;
     const courses = await CourseRepository.listAll();
     const plan = GpaImprovementPlanner.generatePlans(student, courses).find(p => p.strategy === req.body?.strategy);
     if (!plan) {
@@ -1506,6 +1568,7 @@ async function decideRegistration(caller: any, requestId: string, decision: stri
   const advisorName = plainName(caller.nameAr);
   const note = (notes || '').trim();
 
+  if (decision === 'APPROVE' && blockDismissed(caller, student, res)) return;
   if (decision === 'APPROVE') {
     const offerings = await OfferingRepository.listAll();
     const selected = request.offeringIds.map(id => offerings.find(o => o.id === id)).filter((o): o is CourseOffering => !!o);
@@ -1597,49 +1660,14 @@ apiRouter.post('/advisors/approve-schedule', async (req: Request, res: Response)
   }
 });
 
-// Summer Training Submission
-apiRouter.post('/students/:id/training', async (req: Request, res: Response) => {
+// Summer Training Submission (with the uploaded proof; same as POST /training/students/:id)
+apiRouter.post('/students/:id/training', proofUpload, async (req: Request, res: Response) => {
   try {
-    const student = await StudentRepository.findById(req.params.id);
-    if (!student) return res.status(404).json({ error: 'Student not found' });
-
-    const { company, hours, periodWeeks } = req.body;
-
-    if (student.completedCredits < AcademicRulesEngine.MIN_TRAINING_CREDITS) {
-      return res.status(400).json({
-        error: `لا يحق للطالب التقديم للتدريب الصيفي قبل إنجاز ${AcademicRulesEngine.MIN_TRAINING_CREDITS} ساعة معتمدة. رصيدك الحالي (${student.completedCredits}).`,
-      });
-    }
-
-    const trainingHours = (student.trainingHours || 0) + Number(hours || 120);
-
-    await prisma.summerTraining.create({
-      data: {
-        studentId: student.id,
-        company: company || 'شركة برمجيات متخصصة',
-        hours: trainingHours,
-        periodWeeks: Number(periodWeeks || 6),
-        status: 'PENDING',
-      },
-    });
-
-    await addAuditLog(
-      student.id,
-      student.nameAr,
-      'STUDENT',
-      'SUBMIT_TRAINING',
-      'TrainingRecord',
-      student.id,
-      `تقديم إفادة تدريب صيفي لدى شركة (${company || 'شركة برمجيات'}) بعدد (${hours || 120}) ساعة في PostgreSQL.`,
-      `Submitted summer training record for (${company}) with (${hours}) hours in PostgreSQL.`
-    );
-
-    return res.json({
-      success: true,
-      trainingStatus: 'Pending',
-      trainingHours,
-    });
+    return res.json(await TrainingService.submit(getCaller(req), req.params.id, req.body || {}, (req as any).file));
   } catch (err: any) {
+    if (err?.status && err?.messageAr) {
+      return res.status(err.status).json({ error: 'TRAINING', messageAr: err.messageAr, messageEn: err.messageEn });
+    }
     return res.status(500).json({ error: err.message });
   }
 });
@@ -1914,9 +1942,14 @@ apiRouter.post('/advisor/plans/:studentId/decision', async (req: Request, res: R
 // 5. INSTRUCTOR WORKFLOW (Grades & Attendance via PostgreSQL)
 // -------------------------------------------------------------
 apiRouter.get('/instructor/courses', async (req: Request, res: Response) => {
+  const caller = getCaller(req);
   try {
     const instructorOfferings = await OfferingRepository.listAll();
-    const myOfferings = instructorOfferings.filter(o => o.instructorId === 'inst_dr_adel');
+    // My own sections (an administrator sees every section).
+    const myOfferings =
+      caller?.role === 'ADMIN'
+        ? instructorOfferings
+        : instructorOfferings.filter(o => o.instructorId === (caller?.instructorId || 'inst_dr_adel'));
     const courses = await CourseRepository.listAll();
     const courseCodes = new Set(myOfferings.map(o => o.courseCode));
     const myCourses = courses.filter(c => courseCodes.has(c.code));
@@ -1924,6 +1957,7 @@ apiRouter.get('/instructor/courses', async (req: Request, res: Response) => {
     return res.json({
       offerings: myOfferings,
       courses: myCourses,
+      markScheme: AcademicRulesEngine.markScheme(),
     });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
@@ -1931,29 +1965,59 @@ apiRouter.get('/instructor/courses', async (req: Request, res: Response) => {
 });
 
 apiRouter.get('/instructor/courses/:code/students', async (req: Request, res: Response) => {
+  const caller = getCaller(req);
   const { code } = req.params;
   try {
-    const students = await StudentRepository.listAll();
+    const [students, offerings] = await Promise.all([StudentRepository.listAll(), OfferingRepository.listAll()]);
+    // The students sitting in this course this term (in my sections; an administrator sees all sections).
+    const sectionIds = new Set(
+      offerings
+        .filter(o => o.courseCode === code && (caller?.role === 'ADMIN' || !caller?.instructorId || o.instructorId === caller.instructorId))
+        .map(o => o.id)
+    );
     const enrolled = students
-      .filter(s => s.records.some(r => r.courseCode === code))
       .map(s => {
-        const record = s.records.find(r => r.courseCode === code)!;
-        return {
-          studentId: s.id,
-          studentCode: s.studentCode,
-          nameAr: s.nameAr,
-          nameEn: s.nameEn,
-          cumulativeGpa: s.cumulativeGpa,
-          warningCount: s.warningCount,
-          record,
-        };
-      });
+        const current = s.records.filter(r => r.courseCode === code && r.offeringId && sectionIds.has(r.offeringId));
+        const record =
+          current.find(r => r.status === 'IN_PROGRESS' || r.status === 'ENROLLED') ||
+          [...current].sort((a, b) => (b.attempt || 1) - (a.attempt || 1))[0];
+        return record ? { s, record } : null;
+      })
+      .filter((x): x is { s: Student; record: Student['records'][number] } => !!x)
+      .map(({ s, record }) => ({
+        studentId: s.id,
+        studentCode: s.studentCode,
+        nameAr: s.nameAr,
+        nameEn: s.nameEn,
+        cumulativeGpa: s.cumulativeGpa,
+        warningCount: s.warningCount,
+        record,
+      }));
 
     return res.json(enrolled);
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
 });
+
+/**
+ * An instructor enters marks only for students in their own sections of the course
+ * (the administrator for anyone). Sends the refusal and returns false otherwise.
+ */
+async function instructorTeachesStudent(caller: any, studentId: string, code: string, res: Response): Promise<boolean> {
+  if (caller?.role !== 'INSTRUCTOR') return true;
+  const student = await StudentRepository.findExact(String(studentId || ''));
+  const offerings = await OfferingRepository.listAll();
+  const mine = new Set(offerings.filter(o => o.courseCode === code && o.instructorId === caller.instructorId).map(o => o.id));
+  const record = student?.records.find(r => r.courseCode === code && !!r.offeringId && mine.has(r.offeringId));
+  if (record) return true;
+  res.status(403).json({
+    error: 'NOT_YOUR_SECTION',
+    messageAr: 'هذا الطالب ليس في شعبتك من هذا المقرر؛ يرصد درجاته أستاذ شعبته.',
+    messageEn: 'This student is not in your section of the course; their section’s instructor enters the marks.',
+  });
+  return false;
+}
 
 apiRouter.post('/instructor/courses/:code/grades', async (req: Request, res: Response) => {
   if (getCaller(req)?.role === 'TEACHING_ASSISTANT') {
@@ -1972,6 +2036,7 @@ apiRouter.post('/instructor/courses/:code/grades', async (req: Request, res: Res
   const { studentId, courseworkMark, finalMark } = req.body;
 
   try {
+    if (!(await instructorTeachesStudent(caller, studentId, code, res))) return;
     const result = await AcademicTransactionService.updateCourseGrade(
       code,
       studentId,
@@ -1982,23 +2047,58 @@ apiRouter.post('/instructor/courses/:code/grades', async (req: Request, res: Res
 
     const st = result.updatedStudent!;
     const finalGrade = result.gradeAssigned?.finalGrade;
+    const { courseworkMax, finalMax } = AcademicRulesEngine.markScheme();
     await NotificationRepository.createNotification({
       recipientId: studentId,
       type: 'GRADE',
       titleAr: `رُصدت درجتك في ${code}`,
       titleEn: `Your grade for ${code} was posted`,
-      messageAr: `أعمال السنة ${Number(courseworkMark ?? 0)} من 50 والامتحان النهائي ${Number(finalMark ?? 0)} من 50${finalGrade ? `، والتقدير ${finalGrade}` : ''}. معدلك التراكمي الآن ${Number(st.cumulativeGpa).toFixed(2)}.`,
-      messageEn: `Coursework ${Number(courseworkMark ?? 0)}/50 and final exam ${Number(finalMark ?? 0)}/50${finalGrade ? `, grade ${finalGrade}` : ''}. Your cumulative GPA is now ${Number(st.cumulativeGpa).toFixed(2)}.`,
+      messageAr: `أعمال السنة ${Number(courseworkMark ?? 0)} من ${courseworkMax} والامتحان النهائي ${Number(finalMark ?? 0)} من ${finalMax}${finalGrade ? `، والتقدير ${finalGrade}` : ''}. معدلك التراكمي الآن ${Number(st.cumulativeGpa).toFixed(2)}.`,
+      messageEn: `Coursework ${Number(courseworkMark ?? 0)}/${courseworkMax} and final exam ${Number(finalMark ?? 0)}/${finalMax}${finalGrade ? `, grade ${finalGrade}` : ''}. Your cumulative GPA is now ${Number(st.cumulativeGpa).toFixed(2)}.`,
     });
+
+    // The term's warning (once per term) and, at 4 consecutive or 6 separate warnings, dismissal.
+    const consecutiveLimit = AcademicRulesEngine.DISMISSAL_CONSECUTIVE_WARNINGS;
+    const totalLimit = AcademicRulesEngine.DISMISSAL_TOTAL_WARNINGS;
+    if (result.warnedThisTerm) {
+      await NotificationRepository.createOnce(`warning_${st.id}_${result.termId}`, {
+        recipientId: st.id,
+        type: 'WARNING',
+        titleAr: `إنذار أكاديمي رقم ${st.warningCount}`,
+        titleEn: `Academic warning #${st.warningCount}`,
+        messageAr: `معدلك التراكمي ${st.cumulativeGpa.toFixed(2)} أقل من 2.00 هذا الفصل. لديك ${st.consecutiveWarnings} إنذارات متتالية و${st.warningCount} إجمالاً؛ اللائحة تفصل الطالب عند ${consecutiveLimit} إنذارات متتالية أو ${totalLimit} منفصلة. راجع خطة تحسين المعدل ومرشدك.`,
+        messageEn: `Your cumulative GPA of ${st.cumulativeGpa.toFixed(2)} is under 2.00 this term. You have ${st.consecutiveWarnings} consecutive warnings and ${st.warningCount} in all; the bylaw dismisses at ${consecutiveLimit} consecutive or ${totalLimit} separate. See your GPA recovery plan and your advisor.`,
+      }).catch(() => undefined);
+    }
+    if (result.dismissal) {
+      const finalChance = AcademicRulesEngine.finalChanceEligible(st);
+      const textAr = `${plainName(st.nameAr)} (${st.studentCode}) بلغ ${st.consecutiveWarnings >= consecutiveLimit ? `${st.consecutiveWarnings} إنذارات متتالية` : `${st.warningCount} إنذارات منفصلة`}${finalChance ? '، ويستحق فرصة التخرج الاستثنائية لإنجازه 80% من الساعات' : '، وهو حد الفصل في اللائحة'}.`;
+      const textEn = `${plainName(st.nameEn)} (${st.studentCode}) reached ${st.consecutiveWarnings >= consecutiveLimit ? `${st.consecutiveWarnings} consecutive warnings` : `${st.warningCount} warnings in all`}${finalChance ? ' and qualifies for the final-chance rule (80% of the hours done)' : ', the bylaw dismissal limit'}.`;
+      for (const recipientId of [st.id, st.advisorId, 'user_admin'].filter(Boolean)) {
+        await NotificationRepository.createOnce(`dismissal_${st.id}_${recipientId}_${st.warningCount}`, {
+          recipientId,
+          type: 'WARNING',
+          titleAr: finalChance ? 'فرصة التخرج الاستثنائية' : 'بلوغ حد الفصل الأكاديمي',
+          titleEn: finalChance ? 'Final-chance rule applies' : 'Academic dismissal limit reached',
+          messageAr: textAr,
+          messageEn: textEn,
+        }).catch(() => undefined);
+      }
+    }
 
     return res.json({
       success: true,
       newCumulativeGpa: st.cumulativeGpa,
       newWarningCount: st.warningCount,
+      newConsecutiveWarnings: st.consecutiveWarnings,
       newRiskLevel: st.riskLevel,
       gradeAssigned: result.gradeAssigned,
+      academicStatus: AcademicRulesEngine.evaluateStudentStatus(st),
     });
   } catch (err: any) {
+    if (err instanceof GradeValidationError) {
+      return res.status(400).json({ error: 'INVALID_MARK', messageAr: err.messageAr, messageEn: err.messageEn });
+    }
     return res.status(err.message?.includes('not found') ? 404 : 500).json({ error: err.message });
   }
 });
@@ -2020,6 +2120,7 @@ apiRouter.post('/instructor/courses/:code/attendance', async (req: Request, res:
   const { studentId, attendancePercentage } = req.body;
 
   try {
+    if (!(await instructorTeachesStudent(caller, studentId, code, res))) return;
     const student = await StudentRepository.findById(studentId);
     if (!student) return res.status(404).json({ error: 'Student not found' });
 
@@ -2086,6 +2187,10 @@ apiRouter.post('/instructor/courses/:code/attendance', async (req: Request, res:
 // 6. DEPARTMENT HEAD ANALYTICS (Live PostgreSQL Aggregations)
 // -------------------------------------------------------------
 apiRouter.get('/department/analytics', async (req: Request, res: Response) => {
+  const caller = getCaller(req);
+  if (!caller || !['DEPARTMENT_HEAD', 'ADMIN', 'PROCESS_OFFICER'].includes(caller.role)) {
+    return res.status(403).json({ error: 'ROLE_FORBIDDEN', messageAr: 'مؤشرات القسم لرئيس القسم ومدير النظام.', messageEn: 'Department indicators are for the department head and the administrator.' });
+  }
   try {
     const students = await StudentRepository.listAll();
     const courses = await CourseRepository.listAll();
@@ -2178,7 +2283,7 @@ apiRouter.get('/admin/rules', async (req: Request, res: Response) => {
 
 apiRouter.post('/admin/rules/:id', async (req: Request, res: Response) => {
   const caller = getCaller(req);
-  if (caller && caller.role !== 'ADMIN') {
+  if (!caller || caller.role !== 'ADMIN') {
     return res.status(403).json({
       error: 'ROLE_FORBIDDEN',
       messageAr: 'غير مصرح: تعديل قواعد اللائحة مقتصر على مدير النظام فقط.',
@@ -2232,7 +2337,7 @@ apiRouter.get('/admin/audit', async (req: Request, res: Response) => {
 // CSV Sample Data Import with full validation report & PostgreSQL persistence
 apiRouter.post('/admin/import', async (req: Request, res: Response) => {
   const caller = getCaller(req);
-  if (caller && caller.role !== 'ADMIN') {
+  if (!caller || caller.role !== 'ADMIN') {
     return res.status(403).json({
       error: 'ROLE_FORBIDDEN',
       messageAr: 'غير مصرح: استيراد البيانات مقتصر على مدير النظام فقط.',
@@ -2417,7 +2522,7 @@ apiRouter.post('/admin/import', async (req: Request, res: Response) => {
 // Bulk Data Import via Excel (.xlsx) for Students and Course Registrations
 apiRouter.post('/admin/import/students-excel', excelUpload.single('file'), async (req: Request, res: Response) => {
   const caller = getCaller(req);
-  if (caller && caller.role !== 'ADMIN') {
+  if (!caller || caller.role !== 'ADMIN') {
     return res.status(403).json({
       error: 'ROLE_FORBIDDEN',
       messageAr: 'غير مصرح: استيراد البيانات مقتصر على مدير النظام فقط.',
@@ -2760,11 +2865,17 @@ apiRouter.post('/admin/import/students-excel', excelUpload.single('file'), async
       `Excel bulk student import (${req.file.originalname}): ${studentGroups.size} students, ${totalCoursesProcessed} course records. Wipe data: ${wipeData ? 'YES' : 'NO'}.`
     );
 
+    // Imported first-term students get the bylaw's first-term courses, and every
+    // section's seat count matches its students again.
+    const autoRegistration = await RegistrationCenterService.autoRegisterAllFreshmen().catch(() => undefined);
+    await RegistrationCenterService.reconcileSeatCounts().catch(() => undefined);
+
     return res.json({
       success: true,
       importedStudentsCount: studentGroups.size,
       totalRegistrationsCount: totalCoursesProcessed,
       wipedData: wipeData,
+      ...(autoRegistration ? { firstTermAutoRegistered: autoRegistration.registered } : {}),
       messageAr: `تم بنجاح استيراد ${studentGroups.size} طالباً ومزامنة ${totalCoursesProcessed} تسجيلاً أكاديمياً.`,
       messageEn: `Successfully imported ${studentGroups.size} students and synchronized ${totalCoursesProcessed} academic records.`,
     });
@@ -2887,7 +2998,7 @@ apiRouter.get('/integration/sis/status', async (req: Request, res: Response) => 
 
 apiRouter.post('/integration/sis/sync-now', async (req: Request, res: Response) => {
   const caller = getCaller(req);
-  if (caller && caller.role !== 'ADMIN') {
+  if (!caller || caller.role !== 'ADMIN') {
     return res.status(403).json({ error: 'Admin privilege required to trigger SIS sync' });
   }
 

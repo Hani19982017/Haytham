@@ -171,8 +171,8 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigateTa
       tab: 'student-registration',
       icon: CalendarCheck,
       tone: 'sign',
-      title: t('سجّل مقررات فصلك الأول', 'Register your first-term courses'),
-      why: t(`حدك ${creditCap} ساعة. ابدأ من الجدول المقترح وأرسله لمرشدك ليعتمده.`, `Your ceiling is ${creditCap} credit hours. Start from the suggested timetable and send it to your advisor.`),
+      title: t('شاهد مقررات فصلك الأول', 'See your first-term courses'),
+      why: t('سُجّلت لك تلقائياً حسب اللائحة؛ مواعيدها وشعبها في صفحة التسجيل.', 'They are registered for you automatically per the bylaw; times and sections are on the Registration page.'),
     });
   }
   nextSteps.push(
@@ -228,7 +228,12 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigateTa
     });
   }
 
-  const consecutive = Math.min(4, student.consecutiveWarnings || 0);
+  // The bylaw dismisses at 4 consecutive warnings OR 6 warnings in all (separate).
+  const CONSECUTIVE_LIMIT = 4;
+  const TOTAL_LIMIT = 6;
+  const consecutive = Math.min(CONSECUTIVE_LIMIT, student.consecutiveWarnings || 0);
+  const totalWarnings = Math.min(TOTAL_LIMIT, student.warningCount || 0);
+  const dismissalStatus = (student as any).academicStatus?.status as string | undefined;
 
   return (
     <div className="space-y-6">
@@ -324,26 +329,46 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigateTa
           </div>
 
           <div className="border-t border-ink-100 px-5 py-5 sm:px-7 md:border-s md:border-t-0">
-            <span className="text-[12.5px] font-medium text-ink-500">{t('الإنذارات المتتالية', 'Consecutive warnings')}</span>
-            <div className="mt-1 flex items-baseline gap-1.5">
-              <span className={cn('t-num text-[34px] font-extrabold leading-none', consecutive > 0 ? 'text-caution-600' : 'text-ink-950')}>
-                {student.consecutiveWarnings}
-              </span>
-              <span className="text-[13px] text-ink-500">{t(`من 4 (إجمالي ${student.warningCount})`, `of 4 (total ${student.warningCount})`)}</span>
+            <span className="text-[12.5px] font-medium text-ink-500">{t('الإنذارات الأكاديمية', 'Academic warnings')}</span>
+            <div className="mt-2 space-y-3">
+              <div>
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-[12px] font-semibold text-ink-700">{t('متتالية', 'In a row')}</span>
+                  <span className="text-[12.5px] text-ink-500">
+                    <span className={cn('t-num text-[20px] font-extrabold', consecutive > 0 ? 'text-caution-600' : 'text-ink-950')}>{student.consecutiveWarnings}</span>{' '}
+                    {t(`من ${CONSECUTIVE_LIMIT}`, `of ${CONSECUTIVE_LIMIT}`)}
+                  </span>
+                </div>
+                <div className="mt-1.5 flex gap-1.5" aria-hidden="true">
+                  {Array.from({ length: CONSECUTIVE_LIMIT }, (_, i) => (
+                    <span key={i} className={cn('h-2.5 flex-1 rounded-sm', i < consecutive ? (i >= CONSECUTIVE_LIMIT - 2 ? 'bg-signal-500' : 'bg-caution-400') : 'bg-ink-200')} />
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-[12px] font-semibold text-ink-700">{t('إجمالي (منفصلة)', 'In all (separate)')}</span>
+                  <span className="text-[12.5px] text-ink-500">
+                    <span className={cn('t-num text-[20px] font-extrabold', totalWarnings > 0 ? 'text-caution-600' : 'text-ink-950')}>{student.warningCount}</span>{' '}
+                    {t(`من ${TOTAL_LIMIT}`, `of ${TOTAL_LIMIT}`)}
+                  </span>
+                </div>
+                <div className="mt-1.5 flex gap-1" aria-hidden="true">
+                  {Array.from({ length: TOTAL_LIMIT }, (_, i) => (
+                    <span key={i} className={cn('h-2.5 flex-1 rounded-sm', i < totalWarnings ? (i >= TOTAL_LIMIT - 2 ? 'bg-signal-500' : 'bg-caution-400') : 'bg-ink-200')} />
+                  ))}
+                </div>
+              </div>
             </div>
-            <div className="mt-4 flex gap-1.5" aria-hidden="true">
-              {[0, 1, 2, 3].map(i => (
-                <span
-                  key={i}
-                  className={cn(
-                    'h-3 flex-1 rounded-sm',
-                    i < consecutive ? (i >= 2 ? 'bg-signal-500' : 'bg-caution-400') : 'bg-ink-200'
+            <p className={cn('mt-2 text-[12px] leading-5', dismissalStatus === 'DISMISSAL_ELIGIBLE' || dismissalStatus === 'CRITICAL_DISMISSAL_RISK' ? 'font-semibold text-signal-700' : 'text-ink-500')}>
+              {dismissalStatus === 'DISMISSAL_ELIGIBLE'
+                ? t('بلغت حد الفصل حسب اللائحة؛ راجع مرشدك وإدارة شؤون الطلاب.', 'You reached the bylaw dismissal limit; see your advisor and student affairs.')
+                : dismissalStatus === 'CRITICAL_DISMISSAL_RISK'
+                ? t('انتبه: إنذار واحد آخر يبلغ حد الفصل.', 'Careful: one more warning reaches the dismissal limit.')
+                : t(
+                    `اللائحة تفصل الطالب عند ${CONSECUTIVE_LIMIT} إنذارات متتالية أو ${TOTAL_LIMIT} إنذارات منفصلة.`,
+                    `The bylaw dismisses at ${CONSECUTIVE_LIMIT} consecutive or ${TOTAL_LIMIT} separate warnings.`
                   )}
-                />
-              ))}
-            </div>
-            <p className="mt-2 text-[12px] leading-5 text-ink-500">
-              {t('أربعة إنذارات متتالية تعرّض الطالب للفصل حسب اللائحة.', 'Four consecutive warnings put a student at risk of dismissal.')}
             </p>
           </div>
 
@@ -376,10 +401,10 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigateTa
             <p className="text-lane-700">
               {currentRecords.length === 0
                 ? t(
-                    `ابدأ بتسجيل مقررات فصلك الأول (حتى ${creditCap} ساعة): الجدول المقترح جاهز في صفحة التسجيل، راجعه وأرسله لمرشدك ${personName(student.advisorName, language)} ليعتمده.`,
-                    `Start by registering your first-term courses (up to ${creditCap} credit hours): a suggested timetable is ready on the Registration page; review it and send it to your advisor.`
+                    `مقررات فصلك الأول (المستوى الأول) تُسجَّل لك تلقائياً حسب اللائحة، فلا تحتاج إلى اختيارها. افتح صفحة «التسجيل» لترى مقرراتك ومواعيدها، ولأي تعديل راجع مرشدك ${personName(student.advisorName, language)}.`,
+                    `Your first-term (level 1) courses are registered for you automatically per the bylaw, so you do not choose them. Open the Registration page to see them and their times; ask your advisor for any change.`
                   )
-                : t('مقررات فصلك الأول مسجلة. سجّل حضورك في كل محاضرة بمسح رمز QR من صفحة «الحضور».', 'Your first-term courses are registered. Check in to each lecture by scanning the QR code on the Attendance page.')}
+                : t('سُجّلت مقررات فصلك الأول تلقائياً حسب اللائحة. سجّل حضورك في كل محاضرة بمسح رمز QR من صفحة «الحضور».', 'Your first-term courses were registered automatically per the bylaw. Check in to each lecture by scanning the QR code on the Attendance page.')}
             </p>
           </div>
           <button
@@ -465,7 +490,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onNavigateTa
                           <span className="mx-1.5 text-ink-300" aria-hidden="true">|</span>
                           {t('أعمال السنة:', 'Coursework:')}{' '}
                           <span className="t-num font-semibold text-ink-700">
-                            {rec.courseworkMark !== undefined ? `${rec.courseworkMark}/50` : t('لم ترصد بعد', 'not yet entered')}
+                            {rec.courseworkMark !== undefined ? `${rec.courseworkMark}/40` : t('لم ترصد بعد', 'not yet entered')}
                           </span>
                         </p>
                       </div>

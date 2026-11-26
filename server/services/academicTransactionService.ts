@@ -1,8 +1,8 @@
 import { prisma } from '../db/prisma.js';
-import { StudentRepository } from '../repositories/studentRepository.js';
+import { StudentRepository, STUDENT_INCLUDE } from '../repositories/studentRepository.js';
 import { CourseRepository } from '../repositories/courseRepository.js';
 import { OfferingRepository } from '../repositories/offeringRepository.js';
-import { AcademicRulesEngine, ValidationResult } from '../engines/rulesEngine.js';
+import { AcademicRulesEngine, ValidationResult, RegistrationIssueCode } from '../engines/rulesEngine.js';
 import { calculatePercentageToGrade, capRetakeGrade, calculateGpa } from '../engines/gpaEngine.js';
 import { Course, CourseOffering, Student, UserRole } from '../../src/types/index.js';
 
@@ -10,6 +10,30 @@ export interface RegistrationTxResult {
   success: boolean;
   validation: ValidationResult;
   updatedStudent?: Student;
+}
+
+/** How a course came to be registered when the student did not do it themselves. */
+export interface RegistrationOptions {
+  /** Administrator exception: register despite the problems an exception may cover. */
+  override?: boolean;
+  overrideReason?: string;
+  /** Problems already found by the caller (e.g. a timetable clash), checked the same way. */
+  extraIssues?: { code: RegistrationIssueCode; ar: string; en: string }[];
+  /** Shown on the student's record and the section list ("registered by …"). */
+  registeredByName?: string;
+  note?: string;
+  /** Audit action, e.g. REGISTER_COURSES_ON_BEHALF or AUTO_REGISTER_FIRST_TERM. */
+  auditAction?: string;
+}
+
+/** Problems that no exception can cover. */
+const HARD_ISSUES: RegistrationIssueCode[] = ['NOT_FOUND', 'ALREADY_TAKING', 'ALREADY_PASSED'];
+
+/** A mark outside the bylaw's range (coursework 0–40, final 0–60). */
+export class GradeValidationError extends Error {
+  constructor(public messageAr: string, public messageEn: string) {
+    super(messageEn);
+  }
 }
 
 export interface GradeUpdateTxResult {
@@ -36,25 +60,15 @@ export class AcademicTransactionService {
     isSummer: boolean = false,
     caller?: { id: string; nameAr: string; nameEn: string; role: UserRole },
     /** Sections the student picked; otherwise any section of each course. */
-    offeringIds?: string[]
-  ): Promise<RegistrationTxResult> {
+    offeringIds?: string[],
+    options: RegistrationOptions = {}
+  ): Promise<RegistrationTxResult & { waived?: RegistrationIssueCode[] }> {
     try {
       return await prisma.$transaction(async (tx) => {
         // 1. Fetch live student record
         const studentRow = await tx.student.findUnique({
           where: { id: studentId },
-          include: {
-            user: true,
-            advisor: { include: { user: true } },
-            records: {
-              include: {
-                course: true,
-                offering: { include: { semester: true } },
-              },
-            },
-            studyPlans: { take: 1 },
-            trainings: { take: 1 },
-          },
+          include: STUDENT_INCLUDE,
         });
 
         if (!studentRow) {
@@ -94,7 +108,19 @@ export class AcademicTransactionService {
           isSummer
         );
 
-        if (!validation.valid) {
+        // Problems the caller found (e.g. a timetable clash) count like the bylaw's own.
+        for (const issue of options.extraIssues || []) {
+          validation.errorsAr.push(issue.ar);
+          validation.errorsEn.push(issue.en);
+          (validation.issueCodes ||= []).push(issue.code);
+          validation.valid = false;
+        }
+
+        // An administrator's exception covers every problem except the hard ones.
+        const codes = validation.issueCodes || [];
+        const waived = options.override ? [...new Set(codes.filter(c => !HARD_ISSUES.includes(c)))] : [];
+        const blocking = options.override ? codes.filter(c => HARD_ISSUES.includes(c)) : codes;
+        if (!validation.valid && (blocking.length > 0 || !options.override || codes.length === 0)) {
           return {
             success: false,
             validation,
@@ -123,6 +149,8 @@ export class AcademicTransactionService {
               attempt: previousAttempts + 1,
               status: 'IN_PROGRESS',
               attendancePercentage: 100,
+              registeredByName: options.registeredByName || null,
+              note: options.note || (waived.length ? `استثناء من مدير النظام: ${options.overrideReason || ''}`.trim() : null),
             },
           });
         }
@@ -152,36 +180,38 @@ export class AcademicTransactionService {
         const actorName = caller?.nameAr || student.nameAr;
         const actorRole = caller?.role || 'STUDENT';
 
+        const exceptionAr = waived.length
+          ? ` باستثناء من مدير النظام (${waived.join('، ')})${options.overrideReason ? `: ${options.overrideReason}` : ''}`
+          : '';
+        const exceptionEn = waived.length
+          ? ` as an administrator exception (${waived.join(', ')})${options.overrideReason ? `: ${options.overrideReason}` : ''}`
+          : '';
+        const forStudentAr = actorRole === 'STUDENT' ? '' : ` للطالب ${student.nameAr}`;
+        const forStudentEn = actorRole === 'STUDENT' ? '' : ` for ${student.nameEn}`;
+
         await tx.auditLog.create({
           data: {
             userId: validActorUserId,
             userName: actorName,
             userRole: actorRole as any,
-            action: 'REGISTER_COURSES',
+            action: options.auditAction || (waived.length ? 'REGISTER_COURSES_EXCEPTION' : 'REGISTER_COURSES'),
             entity: 'CourseRegistration',
             entityId: student.id,
-            detailsAr: `تسجيل المقررات (${courseCodes.join(', ')}) بإجمالي ${totalNewCredits} ساعة معتمدة.`,
-            detailsEn: `Registered courses (${courseCodes.join(', ')}) totaling ${totalNewCredits} credits.`,
-            after: JSON.stringify({ courseCodes, totalCredits: totalNewCredits }),
+            detailsAr: `تسجيل المقررات (${courseCodes.join(', ')}) بإجمالي ${totalNewCredits} ساعة معتمدة${forStudentAr}${exceptionAr}.`,
+            detailsEn: `Registered courses (${courseCodes.join(', ')}) totaling ${totalNewCredits} credits${forStudentEn}${exceptionEn}.`,
+            after: JSON.stringify({ courseCodes, offeringIds: chosenRows.map(o => o.id), totalCredits: totalNewCredits, waived, reason: options.overrideReason || undefined }),
           },
         });
 
         const updatedRow = await tx.student.findUnique({
           where: { id: studentId },
-          include: {
-            user: true,
-            advisor: { include: { user: true } },
-            records: {
-              include: { course: true, offering: { include: { semester: true } } },
-            },
-            studyPlans: { take: 1 },
-            trainings: { take: 1 },
-          },
+          include: STUDENT_INCLUDE,
         });
 
         return {
           success: true,
           validation,
+          waived,
           updatedStudent: StudentRepository.mapToDomain(updatedRow),
         };
       });
@@ -204,7 +234,7 @@ export class AcademicTransactionService {
         isSummer
       );
 
-      if (!validation.valid) {
+      if (!validation.valid && !(options.override && (validation.issueCodes || []).every(c => !HARD_ISSUES.includes(c)))) {
         return { success: false, validation };
       }
 
@@ -253,8 +283,9 @@ export class AcademicTransactionService {
 
   /**
    * Transactional Grade Submission:
-   * Sets coursework and final marks, applies attempt capping according to bylaws,
-   * recalculates Cumulative GPA and warnings, updates student stats, and logs audit trail.
+   * Sets coursework (out of 40) and final marks (out of 60), applies attempt capping
+   * according to bylaws, recalculates the cumulative GPA and the term's academic
+   * warning (once per term), updates student stats, and logs the audit trail.
    */
   public static async updateCourseGrade(
     courseCode: string,
@@ -262,23 +293,44 @@ export class AcademicTransactionService {
     courseworkMark: number,
     finalMark: number,
     instructorUser?: { id: string; nameAr: string; nameEn: string; role: UserRole }
-  ): Promise<GradeUpdateTxResult> {
+  ): Promise<GradeUpdateTxResult & { warnedThisTerm?: boolean; dismissal?: boolean; termId?: string }> {
+    const { courseworkMax, finalMax, total: maxTotal } = AcademicRulesEngine.markScheme();
+    const cw = Number(courseworkMark);
+    const fin = Number(finalMark);
+    if (!Number.isFinite(cw) || cw < 0 || cw > courseworkMax) {
+      throw new GradeValidationError(
+        `درجة أعمال السنة يجب أن تكون بين 0 و${courseworkMax}.`,
+        `The coursework mark must be between 0 and ${courseworkMax}.`
+      );
+    }
+    if (!Number.isFinite(fin) || fin < 0 || fin > finalMax) {
+      throw new GradeValidationError(
+        `درجة الامتحان النهائي يجب أن تكون بين 0 و${finalMax}.`,
+        `The final exam mark must be between 0 and ${finalMax}.`
+      );
+    }
+
     return await prisma.$transaction(async (tx) => {
       const studentRow = await tx.student.findUnique({
         where: { id: studentId },
         include: {
           user: true,
-          records: { include: { course: true } },
+          records: { include: { course: true, offering: true } },
         },
       });
 
       if (!studentRow) throw new Error(`Student ${studentId} not found`);
 
-      const targetRecord = studentRow.records.find(r => r.course.code === courseCode);
+      // The attempt being studied now (a retake has older records of the same course).
+      const ofCourse = studentRow.records.filter(r => r.course.code === courseCode);
+      const targetRecord =
+        ofCourse.find(r => r.status === 'IN_PROGRESS' || r.status === 'ENROLLED') ||
+        [...ofCourse].sort((a, b) => (b.attempt || 1) - (a.attempt || 1))[0];
       if (!targetRecord) throw new Error(`Course record for ${courseCode} not found for student ${studentId}`);
 
-      const totalMark = Number(courseworkMark) + Number(finalMark);
-      const rawGrade = calculatePercentageToGrade(totalMark);
+      const totalMark = cw + fin;
+      const percent = maxTotal > 0 ? (totalMark / maxTotal) * 100 : 0;
+      const rawGrade = calculatePercentageToGrade(percent);
       const cappedGrade = capRetakeGrade(rawGrade.grade, targetRecord.attempt || 1);
 
       const beforeSnapshot = {
@@ -292,8 +344,8 @@ export class AcademicTransactionService {
       await tx.courseRecord.update({
         where: { id: targetRecord.id },
         data: {
-          courseworkMark: Number(courseworkMark),
-          finalMark: Number(finalMark),
+          courseworkMark: cw,
+          finalMark: fin,
           totalMark,
           grade: cappedGrade.grade,
           gradePoints: cappedGrade.points,
@@ -320,26 +372,38 @@ export class AcademicTransactionService {
         .filter(r => r.status === 'PASSED')
         .reduce((sum, r) => sum + r.course.credits, 0);
 
-      const newWarningCount = gpaResult.gpa < 2.0
-        ? studentRow.warningCount + 1
-        : studentRow.warningCount;
-      const newConsecutiveWarnings = gpaResult.gpa < 2.0
-        ? studentRow.consecutiveWarnings + 1
-        : 0;
+      // 3. The term's academic warning, once per term: worked out from the counters
+      // as they stood when this term's first grade came in.
+      let termId = targetRecord.offering?.semesterId || null;
+      if (!termId) {
+        const current = await tx.semester.findFirst({ where: { isCurrent: true }, select: { id: true } });
+        termId = current?.id || 'sem_current';
+      }
+      const sameTerm = studentRow.standingTermId === termId;
+      const atTermStart = {
+        warningCount: sameTerm ? studentRow.termStartWarnings ?? studentRow.warningCount : studentRow.warningCount,
+        consecutiveWarnings: sameTerm ? studentRow.termStartConsecutive ?? studentRow.consecutiveWarnings : studentRow.consecutiveWarnings,
+      };
+      const standing = AcademicRulesEngine.warningsAfterTerm(atTermStart, gpaResult.gpa);
+      const wasDismissal = AcademicRulesEngine.dismissalReached(studentRow);
+      const nowDismissal = AcademicRulesEngine.dismissalReached(standing);
 
-      // 3. Update Student Record
+      // 4. Update Student Record (the "previous GPA" is the one the term started with)
       await tx.student.update({
         where: { id: studentId },
         data: {
-          previousGpa: studentRow.cumulativeGpa,
+          ...(sameTerm ? {} : { previousGpa: studentRow.cumulativeGpa }),
           cumulativeGpa: gpaResult.gpa,
           completedCredits: passedCredits,
-          warningCount: newWarningCount,
-          consecutiveWarnings: newConsecutiveWarnings,
+          warningCount: standing.warningCount,
+          consecutiveWarnings: standing.consecutiveWarnings,
+          standingTermId: termId,
+          termStartWarnings: atTermStart.warningCount,
+          termStartConsecutive: atTermStart.consecutiveWarnings,
         },
       });
 
-      // 4. Audit Log in same transaction
+      // 5. Audit Log in same transaction
       let validInstUserId: string | null = null;
       if (instructorUser?.id) {
         const u = await tx.user.findUnique({ where: { id: instructorUser.id } });
@@ -358,27 +422,23 @@ export class AcademicTransactionService {
           action: 'SUBMIT_GRADE',
           entity: 'CourseRecord',
           entityId: targetRecord.id,
-          detailsAr: `رصد درجات مقرر ${courseCode}: أعمال سنة ${courseworkMark} + نهائي ${finalMark} = ${totalMark} (تقدير: ${cappedGrade.grade}). المعدل التراكمي الجديد: ${gpaResult.gpa}.`,
-          detailsEn: `Graded course ${courseCode}: coursework ${courseworkMark} + final ${finalMark} = ${totalMark} (${cappedGrade.grade}). New GPA: ${gpaResult.gpa}.`,
+          detailsAr: `رصد درجات مقرر ${courseCode} للطالب ${studentRow.user.nameAr}: أعمال سنة ${cw} من ${courseworkMax} + نهائي ${fin} من ${finalMax} = ${totalMark} (تقدير: ${cappedGrade.grade}). المعدل التراكمي الجديد: ${gpaResult.gpa}، الإنذارات ${standing.warningCount} (متتالية ${standing.consecutiveWarnings}).`,
+          detailsEn: `Graded ${courseCode} for ${studentRow.user.nameEn}: coursework ${cw}/${courseworkMax} + final ${fin}/${finalMax} = ${totalMark} (${cappedGrade.grade}). New GPA: ${gpaResult.gpa}; warnings ${standing.warningCount} (${standing.consecutiveWarnings} consecutive).`,
           before: JSON.stringify(beforeSnapshot),
           after: JSON.stringify({
             totalMark,
             grade: cappedGrade.grade,
             gradePoints: cappedGrade.points,
             cumulativeGpa: gpaResult.gpa,
+            warningCount: standing.warningCount,
+            consecutiveWarnings: standing.consecutiveWarnings,
           }),
         },
       });
 
       const updatedRow = await tx.student.findUnique({
         where: { id: studentId },
-        include: {
-          user: true,
-          advisor: { include: { user: true } },
-          records: { include: { course: true, offering: { include: { semester: true } } } },
-          studyPlans: { take: 1 },
-          trainings: { take: 1 },
-        },
+        include: STUDENT_INCLUDE,
       });
 
       return {
@@ -390,6 +450,73 @@ export class AcademicTransactionService {
           points: cappedGrade.points,
           capped: cappedGrade.capped,
         },
+        warnedThisTerm: standing.warned,
+        dismissal: nowDismissal && !wasDismissal,
+        termId,
+      };
+    });
+  }
+
+  /**
+   * Remove a course registered this term (no marks entered yet): frees the seat
+   * and the student's credit hours. Used by the advisor or administrator.
+   */
+  public static async dropCourse(
+    studentId: string,
+    offeringOrCourse: string,
+    caller: { id: string; nameAr: string; nameEn: string; role: UserRole },
+    reason = ''
+  ): Promise<{ success: boolean; courseCode?: string; messageAr: string; messageEn: string; updatedStudent?: Student }> {
+    return await prisma.$transaction(async (tx) => {
+      const record = await tx.courseRecord.findFirst({
+        where: {
+          studentId,
+          status: { in: ['IN_PROGRESS', 'ENROLLED'] },
+          OR: [{ offeringId: offeringOrCourse }, { course: { code: offeringOrCourse } }, { id: offeringOrCourse }],
+        },
+        include: { course: true, student: { include: { user: true } } },
+      });
+      if (!record) {
+        return { success: false, messageAr: 'المقرر غير مسجل للطالب هذا الفصل.', messageEn: 'The course is not registered for this student this term.' };
+      }
+      if (record.courseworkMark !== null || record.finalMark !== null || record.gradePoints !== null) {
+        return {
+          success: false,
+          courseCode: record.course.code,
+          messageAr: 'رُصدت درجات لهذا المقرر، فلا يمكن حذفه من التسجيل.',
+          messageEn: 'Marks have been entered for this course, so it cannot be removed.',
+        };
+      }
+      await tx.courseRecord.delete({ where: { id: record.id } });
+      if (record.offeringId) {
+        await tx.courseOffering.updateMany({ where: { id: record.offeringId, enrolledCount: { gt: 0 } }, data: { enrolledCount: { decrement: 1 } } });
+      }
+      const credits = record.course.credits;
+      await tx.student.update({
+        where: { id: studentId },
+        data: { enrolledCredits: Math.max(0, (record.student.enrolledCredits || 0) - credits) },
+      });
+      const actor = await tx.user.findUnique({ where: { id: caller.id }, select: { id: true } });
+      await tx.auditLog.create({
+        data: {
+          userId: actor?.id || null,
+          userName: caller.nameAr,
+          userRole: caller.role as any,
+          action: 'DROP_COURSE_ON_BEHALF',
+          entity: 'CourseRegistration',
+          entityId: studentId,
+          detailsAr: `حذف مقرر ${record.course.code} (${record.course.nameAr}) من تسجيل الطالب ${record.student.user.nameAr}${reason ? `: ${reason}` : ''}.`,
+          detailsEn: `Removed ${record.course.code} (${record.course.nameEn}) from ${record.student.user.nameEn}'s registration${reason ? `: ${reason}` : ''}.`,
+          before: JSON.stringify({ courseCode: record.course.code, offeringId: record.offeringId }),
+        },
+      });
+      const updatedRow = await tx.student.findUnique({ where: { id: studentId }, include: STUDENT_INCLUDE });
+      return {
+        success: true,
+        courseCode: record.course.code,
+        messageAr: `حُذف ${record.course.code} من تسجيل الطالب.`,
+        messageEn: `${record.course.code} was removed from the student's registration.`,
+        updatedStudent: StudentRepository.mapToDomain(updatedRow),
       };
     });
   }

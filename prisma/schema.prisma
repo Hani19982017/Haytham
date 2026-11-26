@@ -83,6 +83,14 @@ model Student {
   riskLevel           RiskLevel          @default(LOW)
   advisorId           String?
   advisor             Advisor?           @relation(fields: [advisorId], references: [id], onDelete: SetNull)
+  // REGULAR, or TRANSFER for a student who came from another faculty (طالب موازنة)
+  admissionType       String             @default("REGULAR")
+  previousInstitution String?
+  // Academic warnings are counted once per term: the counters as they stood when
+  // the term's first grade was entered, so re-entering grades never adds a warning twice.
+  standingTermId       String?
+  termStartWarnings    Int?
+  termStartConsecutive Int?
 
   records             CourseRecord[]
   studyPlans          StudyPlan[]
@@ -90,6 +98,7 @@ model Student {
   graduationProjects  GraduationProject[]
   registrationRequests RegistrationRequest[]
   attendanceMarks     AttendanceMark[]
+  equivalencyCases    EquivalencyCase[]
 
   createdAt           DateTime           @default(now())
   updatedAt           DateTime           @updatedAt
@@ -217,6 +226,11 @@ model CourseRecord {
   finalMark            Float?
   totalMark            Float?
   attendancePercentage Float?          @default(100.0)
+  // REGULAR (studied here) or EQUIVALENCY (credited from another faculty)
+  source               String          @default("REGULAR")
+  // Who registered the course when it was not the student (advisor, administrator, automatic)
+  registeredByName     String?
+  note                 String?
 
   createdAt            DateTime        @default(now())
   updatedAt            DateTime        @updatedAt
@@ -248,6 +262,18 @@ model SummerTraining {
   periodWeeks  Int            @default(4)
   status       TrainingStatus @default(PENDING)
   documentUrl  String?
+  startDate    DateTime?
+  endDate      DateTime?
+  studentNotes String?
+  // The proof the student uploaded (certificate or letter from the company)
+  proofFileName String?
+  proofMimeType String?
+  proofSize     Int?
+  proofData     Bytes?
+  // The advisor's (or administrator's) decision on the proof
+  reviewNotes    String?
+  reviewedByName String?
+  reviewedAt     DateTime?
 
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
@@ -381,4 +407,45 @@ model AttendanceMark {
 
   @@unique([sessionId, studentId])
   @@index([studentId])
+}
+
+// Equivalency (موازنة / مقاصة) of a student who transferred from another faculty:
+// the courses studied there, each matched to a course of our bylaw and graded on our scale.
+model EquivalencyCase {
+  id                  String            @id @default(uuid())
+  studentId           String
+  student             Student           @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  previousInstitution String
+  previousProgram     String?
+  status              String            @default("DRAFT") // DRAFT | APPROVED
+  notes               String?
+  createdByName       String
+  approvedByName      String?
+  approvedAt          DateTime?
+  items               EquivalencyItem[]
+
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  @@index([studentId])
+}
+
+model EquivalencyItem {
+  id              String          @id @default(uuid())
+  caseId          String
+  case            EquivalencyCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  position        Int             @default(0)
+  externalCode    String?
+  externalName    String
+  externalCredits Int
+  externalMark    Float?          // percentage obtained at the other faculty (0-100)
+  externalGrade   String?         // the grade as written there, when no percentage is given
+  courseCode      String?         // our equivalent course
+  grade           String?         // our grade after conversion
+  gradePoints     Float?
+  accepted        Boolean         @default(false)
+  reasonAr        String?
+  reasonEn        String?
+
+  @@index([caseId])
 }

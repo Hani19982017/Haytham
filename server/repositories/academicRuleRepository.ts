@@ -3,6 +3,13 @@ import { AcademicRuleConfig } from '../../src/types/index.js';
 import { Prisma } from '@prisma/client';
 import { INITIAL_ACADEMIC_RULES } from '../data/store.js';
 import { AttendancePolicy } from '../engines/attendanceEngine.js';
+import { AcademicRulesEngine } from '../engines/rulesEngine.js';
+
+/** Every engine that reads bylaw values takes the current ones. */
+const applyBylaw = (rules: { key: string; value: unknown }[]) => {
+  AttendancePolicy.apply(rules);
+  AcademicRulesEngine.applyRules(rules as any);
+};
 
 export class AcademicRuleRepository {
   public static mapToDomain(row: any): AcademicRuleConfig {
@@ -35,13 +42,13 @@ export class AcademicRuleRepository {
       });
       if (rows && rows.length > 0) {
         const rules = rows.map(r => this.mapToDomain(r));
-        AttendancePolicy.apply(rules);
+        applyBylaw(rules);
         return rules;
       }
     } catch (err) {
       console.warn('[AcademicRuleRepository] DB listAll fallback:', err);
     }
-    AttendancePolicy.apply(INITIAL_ACADEMIC_RULES);
+    applyBylaw(INITIAL_ACADEMIC_RULES);
     return INITIAL_ACADEMIC_RULES;
   }
 
@@ -92,7 +99,7 @@ export class AcademicRuleRepository {
       });
 
       const rule = this.mapToDomain(updated);
-      AttendancePolicy.apply([rule]);
+      applyBylaw([rule]);
       return rule;
     } catch (err) {
       console.warn(`[AcademicRuleRepository] DB updateRule fallback for ${id}:`, err);
@@ -100,7 +107,7 @@ export class AcademicRuleRepository {
       if (match) {
         match.value = data.value;
         if (data.needsVerification !== undefined) match.needsVerification = data.needsVerification;
-        AttendancePolicy.apply([match]);
+        applyBylaw([match]);
         return match;
       }
       return INITIAL_ACADEMIC_RULES[0];

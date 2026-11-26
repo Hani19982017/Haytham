@@ -13,6 +13,7 @@ import {
   StudyPlan,
 } from '../../types/index.js';
 import { INSTITUTION } from '../../config/institution.js';
+import { FirstTermRegistration } from './FirstTermRegistration.js';
 import {
   PageHeader,
   Panel,
@@ -234,6 +235,8 @@ export const CourseRegistrationView: React.FC = () => {
   const [request, setRequest] = useState<RegistrationRequest | null>(null);
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
   const [studentNote, setStudentNote] = useState('');
+  // A first-term student: the bylaw's first-term courses are registered for them automatically.
+  const [firstTermAutomatic, setFirstTermAutomatic] = useState(false);
   const draftDirty = useRef(false);
   const locked = request?.status === 'PENDING' || request?.status === 'APPROVED';
 
@@ -242,12 +245,15 @@ export const CourseRegistrationView: React.FC = () => {
     const studentId = currentUser?.studentId || currentUser?.id || 'stu_omar';
     try {
       setLoading(true);
-      const [studentData, offeringsData, coursesData, recData, requestData] = await Promise.all([
+      // First, so a first-term student's automatic registration is done before their record loads.
+      const status = await api.getRegistrationStatus(studentId).catch(() => null);
+      const requestData = status?.request ?? null;
+      setFirstTermAutomatic(!!status?.firstTermAutomatic);
+      const [studentData, offeringsData, coursesData, recData] = await Promise.all([
         api.getStudentById(studentId),
         api.getOfferings(),
         api.getCourses(),
         api.getRegistrationRecommendation(studentId),
-        api.getRegistrationRequest(studentId).catch(() => null),
       ]);
 
       setStudent(studentData);
@@ -666,6 +672,10 @@ export const CourseRegistrationView: React.FC = () => {
       tone: request?.status && request.status !== 'DRAFT' ? requestStatusTone[request.status] : 'ink',
     },
   ];
+  if (firstTermAutomatic) {
+    return <FirstTermRegistration student={student} offerings={offerings} courses={courses} request={request} />;
+  }
+
   const newStudent = isNewStudent(student);
   const requestStatus = request?.status || 'DRAFT';
   const dateText = (iso?: string) =>

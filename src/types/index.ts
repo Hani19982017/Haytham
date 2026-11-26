@@ -44,11 +44,18 @@ export interface StudentCourseRecord {
   semesterName: string;
   attempt: number;
   attendancePercentage?: number;
-  courseworkMark?: number; // e.g. out of 50
-  finalMark?: number;      // e.g. out of 50
-  totalMark?: number;      // e.g. out of 100
+  courseworkMark?: number; // out of 40 (COURSEWORK_MAX_MARK)
+  finalMark?: number;      // out of 60 (FINAL_EXAM_MAX_MARK)
+  totalMark?: number;      // out of 100
   /** Section the student sits in (current-term courses). */
   offeringId?: string;
+  /** REGULAR (studied here) or EQUIVALENCY (credited from another faculty). */
+  source?: 'REGULAR' | 'EQUIVALENCY';
+  /** Who registered the course when it was not the student (advisor, administrator, automatic). */
+  registeredByName?: string;
+  note?: string;
+  /** When the course was registered (current-term courses). */
+  registeredAt?: string;
 }
 
 export interface Student {
@@ -74,6 +81,9 @@ export interface Student {
   trainingHours: number;
   trainingStatus: TrainingStatus;
   currentPlanStatus: PlanStatus;
+  /** REGULAR, or TRANSFER for a student who came from another faculty (طالب موازنة). */
+  admissionType?: 'REGULAR' | 'TRANSFER';
+  previousInstitution?: string;
 }
 
 export interface CourseOffering {
@@ -524,4 +534,182 @@ export interface AttendanceCheckInResult {
 export interface AttendanceCloseResult {
   session: AttendanceSessionSummary;
   warningsSent: { studentId: string; nameAr: string; nameEn: string; standing: AttendanceStanding; absent: number; allowedAbsences: number }[];
+}
+
+// ---------------------------------------------------------------------------
+// Registration follow-up (advisor / administrator / student affairs)
+// ---------------------------------------------------------------------------
+
+/**
+ * Where a student is with this term's registration:
+ * NOT_STARTED (nothing yet) → DRAFT (choosing) → PENDING (with the advisor)
+ * → CHANGES_REQUESTED (sent back) → REGISTERED (courses registered).
+ */
+export type RegistrationStage = 'NOT_STARTED' | 'DRAFT' | 'PENDING' | 'CHANGES_REQUESTED' | 'REGISTERED';
+
+export interface RegistrationOverviewRow {
+  studentId: string;
+  studentCode: string;
+  nameAr: string;
+  nameEn: string;
+  level: number;
+  track: AcademicTrack;
+  cumulativeGpa: number;
+  isNewStudent: boolean;
+  admissionType: 'REGULAR' | 'TRANSFER';
+  advisorId: string;
+  advisorName: string;
+  stage: RegistrationStage;
+  /** Registered this term (courses and credits). */
+  registeredCourses: string[];
+  registeredCredits: number;
+  /** In the draft or the request with the advisor. */
+  requestedCourses: string[];
+  requestedCredits: number;
+  maxAllowedCredits: number;
+  /** Registered for the student by the system (first term), the advisor or the administrator. */
+  registeredBy?: string;
+  advisorNotes?: string;
+  submittedAt?: string;
+  updatedAt?: string;
+  requestId?: string;
+  dismissal: boolean;
+}
+
+export interface RegistrationOverview {
+  semesterNameAr: string;
+  semesterNameEn: string;
+  counts: Record<RegistrationStage, number>;
+  rows: RegistrationOverviewRow[];
+}
+
+/** A section with how many students are really registered in it. */
+export interface SectionSummary {
+  offering: CourseOffering;
+  courseNameAr: string;
+  courseNameEn: string;
+  credits: number;
+  level: number;
+  registeredCount: number;
+}
+
+export interface RosterStudent {
+  studentId: string;
+  studentCode: string;
+  nameAr: string;
+  nameEn: string;
+  email: string;
+  level: number;
+  track: AcademicTrack;
+  cumulativeGpa: number;
+  isNewStudent: boolean;
+  advisorName: string;
+  attempt: number;
+  attendancePercentage: number;
+  registeredAt?: string;
+  registeredBy?: string;
+  offeringId?: string;
+  sectionCode?: string;
+}
+
+export interface SectionRoster {
+  section: SectionSummary;
+  students: RosterStudent[];
+}
+
+/** Bylaw check of sections an advisor or administrator wants to register for a student. */
+export interface EnrollmentCheck {
+  valid: boolean;
+  /** Problems an administrator may approve as an exception (with a reason). */
+  canOverride: boolean;
+  totalCredits: number;
+  maxAllowedCredits: number;
+  issues: { code: string; ar: string; en: string; hard: boolean }[];
+  warningsAr: string[];
+  warningsEn: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Summer training with proof
+// ---------------------------------------------------------------------------
+
+export interface TrainingSubmission {
+  id: string;
+  studentId: string;
+  studentCode?: string;
+  studentNameAr?: string;
+  studentNameEn?: string;
+  company: string;
+  hours: number;
+  periodWeeks: number;
+  startDate?: string;
+  endDate?: string;
+  status: TrainingStatus;
+  studentNotes?: string;
+  proofFileName?: string;
+  proofMimeType?: string;
+  proofSize?: number;
+  reviewNotes?: string;
+  reviewedByName?: string;
+  reviewedAt?: string;
+  createdAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// Equivalency (موازنة / مقاصة) of transfer students
+// ---------------------------------------------------------------------------
+
+export interface EquivalencyItemInput {
+  externalCode?: string;
+  externalName: string;
+  externalCredits: number;
+  /** Percentage obtained at the other faculty (0–100). */
+  externalMark?: number | null;
+  /** The grade as written there, used when no percentage is given. */
+  externalGrade?: string | null;
+  /** Our equivalent course. */
+  courseCode?: string | null;
+}
+
+export interface EquivalencyItemResult extends EquivalencyItemInput {
+  id?: string;
+  /** Our grade on our scale, worked out from what the student got there. */
+  grade?: string;
+  gradePoints?: number;
+  percent?: number;
+  courseNameAr?: string;
+  courseNameEn?: string;
+  courseCredits?: number;
+  accepted: boolean;
+  reasonAr?: string;
+  reasonEn?: string;
+}
+
+export interface EquivalencyEvaluation {
+  items: EquivalencyItemResult[];
+  acceptedCredits: number;
+  acceptedCourses: number;
+  maxTransferableCredits: number;
+  minPercent: number;
+  gpa: number;
+  level: number;
+  remainingCredits: number;
+}
+
+export interface EquivalencyCaseSummary {
+  id: string;
+  studentId: string;
+  studentCode: string;
+  studentNameAr: string;
+  studentNameEn: string;
+  previousInstitution: string;
+  previousProgram?: string;
+  status: 'DRAFT' | 'APPROVED';
+  notes?: string;
+  createdByName: string;
+  approvedByName?: string;
+  approvedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  evaluation: EquivalencyEvaluation;
 }

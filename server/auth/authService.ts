@@ -27,7 +27,11 @@ export interface AuthTokens {
 }
 
 const JWT_SECRET = process.env.JWT_SECRET || 'university-secure-academic-secret-key-2026';
-const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'university-secure-academic-refresh-key-2026';
+// Without its own setting, the refresh secret comes from JWT_SECRET (Render generates one),
+// so a refresh token cannot be made with the default written in this file.
+const JWT_REFRESH_SECRET =
+  process.env.JWT_REFRESH_SECRET ||
+  (process.env.JWT_SECRET ? `${process.env.JWT_SECRET}::refresh` : 'university-secure-academic-refresh-key-2026');
 
 // Enterprise User Directory with pre-hashed bcrypt passwords for demo/default accounts
 // Default password for all seed accounts: "password123"
@@ -265,17 +269,39 @@ export class UniversityAuthService {
   /**
    * Refresh expired access token using refresh token
    */
-  public static refreshTokens(refreshToken: string): AuthTokens {
+  public static async refreshTokens(refreshToken: string): Promise<AuthTokens> {
+    let decoded: any;
     try {
-      const decoded: any = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
-      const user = USERS_STORE.find(u => u.id === decoded.sub);
-      if (!user || !user.isActive) {
-        throw new Error('Invalid refresh token');
-      }
-      return this.generateTokens(user);
-    } catch (err) {
+      decoded = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
+    } catch {
       throw new Error('AUTH_REFRESH_EXPIRED: انتهت صلاحية الجلسة، يرجى تسجيل الدخول مجدداً');
     }
+    // Accounts in the database first (imported students, accounts the admin created), then the demo accounts.
+    try {
+      const dbUser = await UserRepository.getById(decoded.sub);
+      if (dbUser) {
+        return this.generateTokens({
+          id: dbUser.id,
+          email: dbUser.email,
+          passwordHash: '',
+          nameAr: dbUser.nameAr,
+          nameEn: dbUser.nameEn,
+          role: dbUser.role,
+          studentId: dbUser.studentId,
+          advisorId: dbUser.advisorId,
+          instructorId: dbUser.instructorId,
+          isActive: true,
+          failedLoginAttempts: 0,
+        });
+      }
+    } catch {
+      /* database unavailable: demo accounts below */
+    }
+    const user = USERS_STORE.find(u => u.id === decoded.sub);
+    if (!user || !user.isActive) {
+      throw new Error('AUTH_REFRESH_EXPIRED: انتهت صلاحية الجلسة، يرجى تسجيل الدخول مجدداً');
+    }
+    return this.generateTokens(user);
   }
 
   /**

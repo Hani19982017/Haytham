@@ -51,6 +51,8 @@ export const InstructorDashboard: React.FC<InstructorDashboardProps> = ({ curren
 
   const [courses, setCourses] = useState<Course[]>([]);
   const [offerings, setOfferings] = useState<CourseOffering[]>([]);
+  // Coursework out of 40 and the final exam out of 60 (bylaw values from the server).
+  const [scheme, setScheme] = useState<{ courseworkMax: number; finalMax: number; total: number }>({ courseworkMax: 40, finalMax: 60, total: 100 });
   const [selectedCourseCode, setSelectedCourseCode] = useState<string>('CS 201');
   const [enrolledStudents, setEnrolledStudents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -65,6 +67,7 @@ export const InstructorDashboard: React.FC<InstructorDashboardProps> = ({ curren
         const data = await api.getInstructorCourses();
         setCourses(data.courses);
         setOfferings(data.offerings);
+        if (data.markScheme) setScheme(data.markScheme);
         if (data.courses.length > 0) {
           setSelectedCourseCode(data.courses[0].code);
         }
@@ -125,11 +128,14 @@ export const InstructorDashboard: React.FC<InstructorDashboardProps> = ({ curren
         const updatedList = await api.getCourseEnrolledStudents(selectedCourseCode);
         setEnrolledStudents(updatedList);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to save grades:', err);
+      const data = err?.response?.data;
       setNotice({
         tone: 'signal',
-        text: t('لم تُحفظ الدرجة. تأكد من اتصال الخادم ثم أعد المحاولة.', 'The marks were not saved. Check the server connection and try again.'),
+        text:
+          (language === 'ar' ? data?.messageAr : data?.messageEn) ||
+          t('لم تُحفظ الدرجة. تأكد من اتصال الخادم ثم أعد المحاولة.', 'The marks were not saved. Check the server connection and try again.'),
       });
     } finally {
       setSavingId(null);
@@ -218,8 +224,8 @@ export const InstructorDashboard: React.FC<InstructorDashboardProps> = ({ curren
         description={
           isGrades
             ? t(
-                'اكتب أعمال السنة (من 50) والامتحان النهائي (من 50). يُحسب التقدير تلقائياً مع سقف الإعادة، ويتحدث معدل الطالب فور الحفظ.',
-                'Enter coursework (out of 50) and the final exam (out of 50). The grade is calculated with the retake cap, and the student’s GPA updates as soon as you save.'
+                `اكتب أعمال السنة (من ${scheme.courseworkMax}) والامتحان النهائي (من ${scheme.finalMax}). يُحسب التقدير تلقائياً مع سقف الإعادة، ويتحدث معدل الطالب فور الحفظ.`,
+                `Enter coursework (out of ${scheme.courseworkMax}) and the final exam (out of ${scheme.finalMax}). The grade is calculated with the retake cap, and the student’s GPA updates as soon as you save.`
               )
             : t(
                 'عدّل نسبة حضور كل طالب؛ تُحفظ عند الخروج من الخانة أو الضغط على Enter. تحت 75% يصل الطالب إنذار غياب تلقائياً.',
@@ -358,8 +364,8 @@ export const InstructorDashboard: React.FC<InstructorDashboardProps> = ({ curren
                       <tr>
                         <th>{t('الطالب', 'Student')}</th>
                         <th className="num">{t('المعدل', 'GPA')}</th>
-                        <th className="num">{t('أعمال السنة (50)', 'Coursework (50)')}</th>
-                        <th className="num">{t('النهائي (50)', 'Final (50)')}</th>
+                        <th className="num">{t(`أعمال السنة (${scheme.courseworkMax})`, `Coursework (${scheme.courseworkMax})`)}</th>
+                        <th className="num">{t(`النهائي (${scheme.finalMax})`, `Final (${scheme.finalMax})`)}</th>
                         <th className="num">{t('المجموع', 'Total')}</th>
                         <th className="num">{t('التقدير', 'Grade')}</th>
                         <th className="num">
@@ -374,6 +380,7 @@ export const InstructorDashboard: React.FC<InstructorDashboardProps> = ({ curren
                           item={item}
                           rec={item.record}
                           onSaveGrade={handleUpdateGrade}
+                          scheme={scheme}
                           saving={savingId === item.studentId}
                           t={t}
                           language={language}
@@ -446,16 +453,17 @@ const GradebookRow: React.FC<{
   item: any;
   rec: any;
   onSaveGrade: (studentId: string, cw: number, fin: number) => void;
+  scheme: { courseworkMax: number; finalMax: number; total: number };
   saving: boolean;
   t: (ar: string, en: string) => string;
   language: string;
-}> = ({ item, rec, onSaveGrade, saving, t, language }) => {
+}> = ({ item, rec, onSaveGrade, saving, t, language, scheme }) => {
   const [cw, setCw] = useState<number>(rec.courseworkMark ?? 0);
   const [fin, setFin] = useState<number>(rec.finalMark ?? 0);
 
   const total = cw + fin;
-  const cwInvalid = cw < 0 || cw > 50;
-  const finInvalid = fin < 0 || fin > 50;
+  const cwInvalid = !Number.isFinite(cw) || cw < 0 || cw > scheme.courseworkMax;
+  const finInvalid = !Number.isFinite(fin) || fin < 0 || fin > scheme.finalMax;
   const name = language === 'ar' ? item.nameAr : item.nameEn;
 
   return (
@@ -467,7 +475,7 @@ const GradebookRow: React.FC<{
         <input
           type="number"
           min="0"
-          max="50"
+          max={scheme.courseworkMax}
           value={cw}
           onChange={e => setCw(Number(e.target.value))}
           aria-label={t(`أعمال السنة للطالب ${name}`, `Coursework for ${name}`)}
@@ -480,7 +488,7 @@ const GradebookRow: React.FC<{
         <input
           type="number"
           min="0"
-          max="50"
+          max={scheme.finalMax}
           value={fin}
           onChange={e => setFin(Number(e.target.value))}
           aria-label={t(`درجة النهائي للطالب ${name}`, `Final exam for ${name}`)}
@@ -491,7 +499,7 @@ const GradebookRow: React.FC<{
 
       <td className="num">
         <span className="t-num text-[14px] font-extrabold text-ink-900">{total}</span>
-        <span className="text-[12px] text-ink-400"> / 100</span>
+        <span className="text-[12px] text-ink-400"> / {scheme.total}</span>
       </td>
 
       <td className="num">
@@ -508,7 +516,7 @@ const GradebookRow: React.FC<{
       </td>
 
       <td className="num">
-        <button type="button" disabled={saving} onClick={() => onSaveGrade(item.studentId, cw, fin)} className="btn btn-primary btn-sm">
+        <button type="button" disabled={saving || cwInvalid || finInvalid} onClick={() => onSaveGrade(item.studentId, cw, fin)} className="btn btn-primary btn-sm" title={cwInvalid || finInvalid ? t(`أعمال السنة من 0 إلى ${scheme.courseworkMax} والنهائي من 0 إلى ${scheme.finalMax}`, `Coursework 0–${scheme.courseworkMax}, final 0–${scheme.finalMax}`) : undefined}>
           <Save aria-hidden="true" />
           {saving ? t('جارٍ الحفظ…', 'Saving…') : t('حفظ', 'Save')}
         </button>

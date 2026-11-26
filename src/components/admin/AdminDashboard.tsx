@@ -5,6 +5,9 @@ import { api } from '../../services/api.js';
 import { AcademicRuleConfig, AuditLogItem, Course, CourseOffering, Student } from '../../types/index.js';
 import { UserManagementView } from './UserManagementView.js';
 import { DataImportView } from './DataImportView.js';
+import { EquivalencyView } from './EquivalencyView.js';
+import { RegistrationCenter } from '../registration/RegistrationCenter.js';
+import { SectionRosterModal } from '../registration/SectionRosterModal.js';
 import {
   PageHeader,
   Panel,
@@ -47,6 +50,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Undo2,
+  Users,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -55,7 +59,7 @@ interface AdminDashboardProps {
   onNavigateTab?: (tab: string) => void;
 }
 
-type AdminTab = 'OVERVIEW' | 'USERS' | 'COURSES' | 'OFFERINGS' | 'RULES' | 'IMPORT' | 'AUDIT';
+type AdminTab = 'OVERVIEW' | 'USERS' | 'COURSES' | 'OFFERINGS' | 'RULES' | 'IMPORT' | 'AUDIT' | 'REGISTRATION' | 'EQUIVALENCY';
 
 const mapTabFromProp = (tab?: string): AdminTab => {
   switch (tab) {
@@ -71,6 +75,10 @@ const mapTabFromProp = (tab?: string): AdminTab => {
       return 'IMPORT';
     case 'admin-audit':
       return 'AUDIT';
+    case 'admin-registration':
+      return 'REGISTRATION';
+    case 'admin-equivalency':
+      return 'EQUIVALENCY';
     case 'admin-dashboard':
     default:
       return 'OVERVIEW';
@@ -109,6 +117,16 @@ const AUDIT_ACTION_LABELS: Record<string, { ar: string; en: string }> = {
   UPDATE_ATTENDANCE: { ar: 'تحديث الحضور', en: 'Attendance updated' },
   SUBMIT_TRAINING: { ar: 'تقديم تدريب صيفي', en: 'Training submitted' },
   APPROVE: { ar: 'اعتماد', en: 'Approved' },
+  REGISTER_COURSES_ON_BEHALF: { ar: 'تسجيل للطالب (مرشد/مدير)', en: 'Registered for a student' },
+  REGISTER_COURSES_EXCEPTION: { ar: 'تسجيل باستثناء من اللائحة', en: 'Registered as a bylaw exception' },
+  AUTO_REGISTER_FIRST_TERM: { ar: 'تسجيل تلقائي للفصل الأول', en: 'Automatic first-term registration' },
+  DROP_COURSE_ON_BEHALF: { ar: 'حذف مقرر من التسجيل', en: 'Course removed from registration' },
+  ACCEPT_TRAINING: { ar: 'قبول إثبات تدريب', en: 'Training proof accepted' },
+  REJECT_TRAINING: { ar: 'رفض إثبات تدريب', en: 'Training proof rejected' },
+  CREATE_EQUIVALENCY: { ar: 'فتح ملف موازنة', en: 'Equivalency opened' },
+  APPROVE_EQUIVALENCY: { ar: 'اعتماد موازنة', en: 'Equivalency approved' },
+  ADVISOR_RETURN_SCHEDULE: { ar: 'إعادة جدول للتعديل', en: 'Schedule sent back' },
+  ADOPT_GPA_RECOVERY_PLAN: { ar: 'اعتماد خطة تحسين معدل', en: 'GPA recovery route adopted' },
 };
 
 const AUDIT_ENTITY_LABELS: Record<string, { ar: string; en: string }> = {
@@ -122,6 +140,11 @@ const AUDIT_ENTITY_LABELS: Record<string, { ar: string; en: string }> = {
   StudyPlan: { ar: 'خطة دراسية', en: 'Study plan' },
   Registration: { ar: 'تسجيل', en: 'Registration' },
   Transcript: { ar: 'سجل موثق', en: 'Transcript' },
+  CourseRegistration: { ar: 'تسجيل مقررات', en: 'Course registration' },
+  RegistrationRequest: { ar: 'طلب تسجيل', en: 'Registration request' },
+  SummerTraining: { ar: 'تدريب صيفي', en: 'Summer training' },
+  EquivalencyCase: { ar: 'موازنة', en: 'Equivalency' },
+  CourseRecord: { ar: 'سجل مقرر', en: 'Course record' },
 };
 
 const humanize = (code: string) => {
@@ -176,6 +199,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentTab, onNa
         case 'AUDIT':
           onNavigateTab('admin-audit');
           break;
+        case 'REGISTRATION':
+          onNavigateTab('admin-registration');
+          break;
+        case 'EQUIVALENCY':
+          onNavigateTab('admin-equivalency');
+          break;
       }
     }
   };
@@ -227,6 +256,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentTab, onNa
   // Feedback toast (replaces the old inline alert banner)
   const [toast, setToast] = useState<{ tone: 'sign' | 'signal' | 'caution'; text: string } | null>(null);
   const [syncingSis, setSyncingSis] = useState(false);
+  // Section whose student list (names) is open.
+  const [rosterFor, setRosterFor] = useState<string | null>(null);
 
   const notify = (text: string, tone: 'sign' | 'signal' | 'caution' = 'sign') => setToast({ tone, text });
 
@@ -522,6 +553,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentTab, onNa
   const criticalStudentsCount = students.filter(s => s.riskLevel === 'CRITICAL').length;
   const highRiskStudentsCount = students.filter(s => s.riskLevel === 'HIGH').length;
 
+  // Pages with their own data.
+  if (activeAdminTab === 'REGISTRATION') return <RegistrationCenter mode="admin" />;
+  if (activeAdminTab === 'EQUIVALENCY') return <EquivalencyView />;
+
   if (loading) {
     return <Loader label={t('جارٍ تحميل بيانات الإدارة…', 'Loading administration data…')} />;
   }
@@ -739,6 +774,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentTab, onNa
           {toast.text}
         </Toast>
       )}
+      {rosterFor && <SectionRosterModal offeringId={rosterFor} onClose={() => setRosterFor(null)} />}
 
       {/* ===================================================================
           OVERVIEW — system status board
@@ -1150,12 +1186,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentTab, onNa
                     <th className="num">{t('المسجلون', 'Enrolled')}</th>
                     <th>{t('السعة', 'Capacity')}</th>
                     <th>{t('الامتلاء', 'Fill rate')}</th>
+                    <th className="num">{t('أسماء الطلاب', 'Student names')}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredOfferings.length === 0 ? (
                     <tr>
-                      <td colSpan={6}>
+                      <td colSpan={7}>
                         <EmptyState icon={Search} title={t('لا توجد شعب مطابقة', 'No matching sections')} description={t('غيّر كلمة البحث.', 'Change the search words.')} />
                       </td>
                     </tr>
@@ -1213,6 +1250,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentTab, onNa
                               {off.enrolledCount >= off.capacity && <span className="font-semibold text-signal-600">{t('ممتلئة', 'Full')}</span>}
                             </div>
                             <Meter value={pressurePct} tone={fillTone} label={t('نسبة امتلاء الشعبة', 'Section fill rate')} />
+                          </td>
+                          <td className="num">
+                            <button type="button" onClick={() => setRosterFor(off.id)} className="btn btn-secondary btn-sm">
+                              <Users aria-hidden="true" />
+                              {t('عرض الأسماء', 'Show names')}
+                            </button>
                           </td>
                         </tr>
                       );

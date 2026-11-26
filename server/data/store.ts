@@ -915,7 +915,7 @@ export const INITIAL_STUDENTS: Student[] = [
         semesterName: 'خريف 2026',
         attempt: 1,
         attendancePercentage: 68,
-        courseworkMark: 28,
+        courseworkMark: 22,
         offeringId: 'off_cs210_s1',
       },
     ],
@@ -1005,7 +1005,7 @@ export const INITIAL_STUDENTS: Student[] = [
         semesterName: 'خريف 2026',
         attempt: 1,
         attendancePercentage: 96,
-        courseworkMark: 48,
+        courseworkMark: 38,
         offeringId: 'off_cs498',
       },
     ],
@@ -1300,6 +1300,14 @@ export const INITIAL_STUDENTS: Student[] = [
   for (const s of generated(3)) enroll(s, 'off_cs304');
 })();
 
+// Each section's seat count is the number of students really registered in it,
+// so the count on every page matches the names on the section's list.
+(function syncEnrolledCounts() {
+  for (const o of INITIAL_OFFERINGS) {
+    o.enrolledCount = INITIAL_STUDENTS.filter(s => s.records.some(r => r.offeringId === o.id)).length;
+  }
+})();
+
 /** Lectures and sections already held this term, with each student's mark (see seedAttendance.ts). */
 export const INITIAL_ATTENDANCE = buildAttendanceHistory({
   students: INITIAL_STUDENTS,
@@ -1439,6 +1447,72 @@ export const INITIAL_ACADEMIC_RULES: AcademicRuleConfig[] = [
     needsVerification: true,
     notesAr: 'نسبة الغياب التي يُحرم بعدها الطالب من دخول الامتحان النهائي، محسوبة من عدد المحاضرات والسكاشن المقررة في الفصل. بانتظار القيمة الرسمية من اللائحة.',
     notesEn: 'Absence share after which a student is barred from the final exam, counted over the term’s planned lectures and sections. Awaiting the official bylaw value.',
+  },
+  {
+    id: 'rule_dismissal_consecutive',
+    key: 'DISMISSAL_CONSECUTIVE_WARNINGS',
+    titleAr: 'عدد الإنذارات المتتالية الموجبة للفصل',
+    titleEn: 'Consecutive warnings that lead to dismissal',
+    value: 4,
+    defaultValue: 4,
+    needsVerification: false,
+    notesAr: 'يُفصل الطالب إذا تتابعت عليه 4 إنذارات أكاديمية في فصول متتالية، أو بلغ مجموع إنذاراته الحد التالي حتى لو كانت منفصلة. يُحسب الإنذار مرة واحدة لكل فصل.',
+    notesEn: 'A student is dismissed after 4 academic warnings in consecutive terms, or on reaching the next limit in all even if separate. One warning at most per term.',
+  },
+  {
+    id: 'rule_dismissal_total',
+    key: 'DISMISSAL_TOTAL_WARNINGS',
+    titleAr: 'إجمالي الإنذارات المنفصلة الموجبة للفصل',
+    titleEn: 'Separate warnings in all that lead to dismissal',
+    value: 6,
+    defaultValue: 6,
+    needsVerification: false,
+    notesAr: '6 إنذارات منفصلة (غير متتالية) طوال الدراسة توجب الفصل، مع بند فرصة التخرج لمن أنجز 80% من الساعات.',
+    notesEn: '6 warnings in all over the whole degree (not in a row) lead to dismissal, except under the final-chance rule for students past 80% of the hours.',
+  },
+  {
+    id: 'rule_coursework_max',
+    key: 'COURSEWORK_MAX_MARK',
+    titleAr: 'الدرجة العظمى لأعمال السنة',
+    titleEn: 'Coursework maximum mark',
+    value: 40,
+    defaultValue: 40,
+    needsVerification: false,
+    notesAr: 'أعمال السنة 40 درجة والامتحان النهائي 60 درجة من 100.',
+    notesEn: 'Coursework is out of 40 and the final exam out of 60, 100 in all.',
+  },
+  {
+    id: 'rule_final_exam_max',
+    key: 'FINAL_EXAM_MAX_MARK',
+    titleAr: 'الدرجة العظمى للامتحان النهائي',
+    titleEn: 'Final exam maximum mark',
+    value: 60,
+    defaultValue: 60,
+    needsVerification: false,
+    notesAr: 'الامتحان النهائي 60 درجة، ويُحسب التقدير من مجموع أعمال السنة والنهائي (من 100).',
+    notesEn: 'The final exam is out of 60; the grade comes from coursework plus final (out of 100).',
+  },
+  {
+    id: 'rule_equivalency_min_percent',
+    key: 'EQUIVALENCY_MIN_PERCENT',
+    titleAr: 'أقل نسبة تُعادَل بها مادة لطالب الموازنة (%)',
+    titleEn: 'Lowest mark credited in an equivalency (%)',
+    value: 60,
+    defaultValue: 60,
+    needsVerification: true,
+    notesAr: 'المادة التي درسها الطالب المحوَّل خارج الكلية لا تُعادَل إلا إذا حصل فيها على هذه النسبة على الأقل، ويُحسب تقديرها بمقياس الكلية. بانتظار القيمة الرسمية من اللائحة.',
+    notesEn: 'A course a transfer student took elsewhere is credited only with at least this mark, then graded on our scale. Awaiting the official bylaw value.',
+  },
+  {
+    id: 'rule_equivalency_max_credits',
+    key: 'EQUIVALENCY_MAX_CREDITS_PERCENT',
+    titleAr: 'أقصى نسبة من ساعات البرنامج تُعادَل للطالب المحوَّل (%)',
+    titleEn: 'Largest share of the degree credited to a transfer student (%)',
+    value: 50,
+    defaultValue: 50,
+    needsVerification: true,
+    notesAr: 'يدرس الطالب المحوَّل بالكلية بقية الساعات على الأقل، ولا يُعادَل له مشروع التخرج. بانتظار القيمة الرسمية من اللائحة.',
+    notesEn: 'The transfer student studies at least the rest of the hours here; the graduation project is never credited. Awaiting the official bylaw value.',
   },
   {
     id: 'rule_teaching_weeks',

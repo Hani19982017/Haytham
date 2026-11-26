@@ -60,9 +60,21 @@ async function runExcelImportTest() {
   formData.append('file', blob, 'test_students.xlsx');
   formData.append('wipeData', 'false');
 
+  // The import is for the administrator: sign in first.
+  const loginRes = await fetch('http://localhost:3000/api/v1/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
+  });
+  const { token } = await loginRes.json();
+  const auth = { Authorization: `Bearer ${token}` };
+  const anonymous = await fetch('http://localhost:3000/api/v1/admin/import/students-excel', { method: 'POST', body: formData });
+  assert.strictEqual(anonymous.status, 401, 'An import without signing in is refused');
+
   console.log('Sending POST to http://localhost:3000/api/v1/admin/import/students-excel...');
   const res = await fetch('http://localhost:3000/api/v1/admin/import/students-excel', {
     method: 'POST',
+    headers: auth,
     body: formData,
   });
 
@@ -159,6 +171,7 @@ async function runExcelImportTest() {
 
   const wipeRes = await fetch('http://localhost:3000/api/v1/admin/import/students-excel', {
     method: 'POST',
+    headers: auth,
     body: wipeFormData,
   });
 

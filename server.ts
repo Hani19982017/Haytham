@@ -15,6 +15,7 @@ import { StudentRepository } from './server/repositories/studentRepository.js';
 import { OfferingRepository } from './server/repositories/offeringRepository.js';
 import { CourseRepository } from './server/repositories/courseRepository.js';
 import { AcademicRuleRepository } from './server/repositories/academicRuleRepository.js';
+import { RegistrationCenterService } from './server/services/registrationCenterService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -195,6 +196,9 @@ async function startServer() {
 
   try {
     await ensureDatabaseRunning();
+    // First-term students get their courses, old coursework marks move to the
+    // 40-mark scale, and each section's seat count matches its students.
+    await RegistrationCenterService.startupMaintenance();
     await ensureStartingNotifications();
   } catch (err) {
     console.warn('[Database] Preparation failed; the app keeps running on its in-memory demo data.', err);

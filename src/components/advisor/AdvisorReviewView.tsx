@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLanguage } from '../../context/LanguageContext.js';
 import { api } from '../../services/api.js';
-import type { PlanStatus, RegistrationRequestReview, Student, StudyPlan } from '../../types/index.js';
+import type { PlanStatus, RegistrationRequestReview, Student, StudyPlan, TrainingSubmission } from '../../types/index.js';
+import { TrainingReviewPanel } from './TrainingReviewPanel.js';
 import {
   PageHeader,
   Panel,
@@ -45,9 +46,10 @@ import {
   ChevronUp,
   RotateCcw,
   GraduationCap,
+  Briefcase,
 } from 'lucide-react';
 
-type Tab = 'REGISTRATION' | 'PLANS' | 'HISTORY';
+type Tab = 'REGISTRATION' | 'PLANS' | 'TRAINING' | 'HISTORY';
 
 const errorText = (err: any, language: string, ar: string, en: string) => {
   const data = err?.response?.data;
@@ -69,6 +71,19 @@ export const AdvisorReviewView: React.FC<{
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState<string | null>(null);
   const [toast, setToast] = useState<{ tone: 'sign' | 'signal'; text: string } | null>(null);
+  const [trainings, setTrainings] = useState<TrainingSubmission[]>([]);
+
+  const loadTrainings = useCallback(async () => {
+    try {
+      setTrainings(await api.getTrainingReviewQueue());
+    } catch {
+      setTrainings([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadTrainings();
+  }, [loadTrainings]);
 
   const load = useCallback(async () => {
     try {
@@ -116,6 +131,9 @@ export const AdvisorReviewView: React.FC<{
           <>
             <Chip tone={pending.length ? 'lane' : 'sign'}>{t(`${pending.length} جدول تسجيل بانتظارك`, `${pending.length} timetables waiting`)}</Chip>
             <Chip tone={pendingPlans.length ? 'route' : 'sign'}>{t(`${pendingPlans.length} خطة دراسية بانتظارك`, `${pendingPlans.length} study plans waiting`)}</Chip>
+            {trainings.some(x => x.status === 'Pending') && (
+              <Chip tone="caution">{t(`${trainings.filter(x => x.status === 'Pending').length} إثبات تدريب بانتظارك`, `${trainings.filter(x => x.status === 'Pending').length} training proofs waiting`)}</Chip>
+            )}
           </>
         }
         actions={
@@ -126,6 +144,7 @@ export const AdvisorReviewView: React.FC<{
             options={[
               { value: 'REGISTRATION', label: t('جداول التسجيل', 'Timetables'), count: pending.length, icon: CalendarCheck },
               { value: 'PLANS', label: t('خطط الدراسة', 'Study plans'), count: pendingPlans.length, icon: Route },
+              { value: 'TRAINING', label: t('إثباتات التدريب', 'Training proofs'), count: trainings.filter(x => x.status === 'Pending').length, icon: Briefcase },
               { value: 'HISTORY', label: t('قراراتك', 'Your decisions'), count: decided.length, icon: History },
             ]}
           />
@@ -194,6 +213,14 @@ export const AdvisorReviewView: React.FC<{
             ))}
           </div>
         ))}
+
+      {tab === 'TRAINING' && (
+        <TrainingReviewPanel
+          items={trainings}
+          onChanged={loadTrainings}
+          onToast={(text, ok) => setToast({ tone: ok ? 'sign' : 'signal', text })}
+        />
+      )}
 
       {tab === 'HISTORY' &&
         (decided.length === 0 ? (

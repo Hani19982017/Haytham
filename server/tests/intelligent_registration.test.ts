@@ -213,14 +213,16 @@ async function runTests() {
   // TEST 15: Full section is detected & alternative suggested
   // (off_cs306_s1 is full: 50/50, alternative off_cs306_s2 is open: 28/50)
   // -------------------------------------------------------------------------
+  // Seat counts follow real registrations, so fill section 1 for this check.
+  const offeringsWithFullSection = allOfferings.map(o => (o.id === 'off_cs306_s1' ? { ...o, enrolledCount: o.capacity } : o));
   const fullSectionOfferings = [
-    allOfferings.find(o => o.id === 'off_cs306_s1')!,
+    offeringsWithFullSection.find(o => o.id === 'off_cs306_s1')!,
   ];
   const fullSectionValidation = RegistrationAdvisorEngine.validateProposedRegistration(
     saraStudent,
     fullSectionOfferings,
     allCourses,
-    allOfferings,
+    offeringsWithFullSection,
     false
   );
   assert(

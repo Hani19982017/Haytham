@@ -98,10 +98,15 @@ export class AcademicRiskEngine {
     }
 
     // 2. Academic Warning count
-    if (student.warningCount >= 3 || student.consecutiveWarnings >= 3) {
+    // The bylaw dismisses at 4 consecutive warnings OR 6 warnings in all (separate).
+    if (AcademicRulesEngine.dismissalReached(student)) {
+      score += 60;
+      reasonsAr.push(`بلغ الطالب حد الفصل الأكاديمي: ${student.consecutiveWarnings} إنذارات متتالية و${student.warningCount} إجمالاً (الحد ${AcademicRulesEngine.DISMISSAL_CONSECUTIVE_WARNINGS} متتالية أو ${AcademicRulesEngine.DISMISSAL_TOTAL_WARNINGS} منفصلة)`);
+      reasonsEn.push(`Dismissal limit reached: ${student.consecutiveWarnings} consecutive and ${student.warningCount} warnings in all (limit ${AcademicRulesEngine.DISMISSAL_CONSECUTIVE_WARNINGS} consecutive or ${AcademicRulesEngine.DISMISSAL_TOTAL_WARNINGS} separate)`);
+    } else if (AcademicRulesEngine.oneWarningFromDismissal(student)) {
       score += 40;
-      reasonsAr.push(`خطر الفصل الأكاديمي الوشيك: تسجيل ${student.consecutiveWarnings} إنذارات متتالية (${student.warningCount} إجمالياً)`);
-      reasonsEn.push(`Imminent dismissal danger: ${student.consecutiveWarnings} consecutive warnings (${student.warningCount} total)`);
+      reasonsAr.push(`خطر الفصل الأكاديمي الوشيك: ${student.consecutiveWarnings} إنذارات متتالية و${student.warningCount} إجمالاً؛ إنذار واحد آخر يبلغ الحد (${AcademicRulesEngine.DISMISSAL_CONSECUTIVE_WARNINGS} متتالية أو ${AcademicRulesEngine.DISMISSAL_TOTAL_WARNINGS} منفصلة)`);
+      reasonsEn.push(`Imminent dismissal danger: ${student.consecutiveWarnings} consecutive and ${student.warningCount} warnings in all; one more reaches the limit (${AcademicRulesEngine.DISMISSAL_CONSECUTIVE_WARNINGS} consecutive or ${AcademicRulesEngine.DISMISSAL_TOTAL_WARNINGS} separate)`);
     } else if (student.warningCount > 0) {
       score += student.warningCount * 12;
       reasonsAr.push(`سجل الطالب يحتوي على ${student.warningCount} إنذارات أكاديمية سابقة`);

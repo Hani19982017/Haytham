@@ -129,7 +129,8 @@ export function buildSeedNotifications({ students, offerings, courses, rules, no
   const gradProjectMin = Math.ceil(totalCredits * AcademicRulesEngine.MIN_GRAD_PROJECT_PERCENTAGE);
   const gradProjectCodes = courses.filter(c => /graduation project/i.test(c.nameEn)).map(c => c.code).sort();
   const firstProject = courses.find(c => c.code === gradProjectCodes[0]);
-  const lastWarningBeforeDismissal = AcademicRulesEngine.DISMISSAL_CONSECUTIVE_WARNINGS - 1;
+  const courseworkMax = ruleValue('COURSEWORK_MAX_MARK', AcademicRulesEngine.COURSEWORK_MAX_MARK);
+  const dismissalText = `${AcademicRulesEngine.DISMISSAL_CONSECUTIVE_WARNINGS} إنذارات متتالية أو ${AcademicRulesEngine.DISMISSAL_TOTAL_WARNINGS} منفصلة`;
 
   // ---------------------------------------------------------------- students
   for (const s of students) {
@@ -155,27 +156,27 @@ export function buildSeedNotifications({ students, offerings, courses, rules, no
         add(s.id, `coursework_${r.courseCode}`, 'GRADE', D + 2 * H + i * 30, false, {
           titleAr: `رُصدت أعمال السنة في ${r.courseCode}`,
           titleEn: `Coursework mark posted for ${r.courseCode}`,
-          messageAr: `درجتك في أعمال السنة لمقرر ${r.courseNameAr}: ${r.courseworkMark} من 50.`,
-          messageEn: `Your coursework mark in ${r.courseNameEn}: ${r.courseworkMark} out of 50.`,
+          messageAr: `درجتك في أعمال السنة لمقرر ${r.courseNameAr}: ${r.courseworkMark} من ${courseworkMax}.`,
+          messageEn: `Your coursework mark in ${r.courseNameEn}: ${r.courseworkMark} out of ${courseworkMax}.`,
         })
       );
 
-    if (AcademicRulesEngine.isNewStudent(s) && current.length === 0) {
+    if (AcademicRulesEngine.isFreshman(s)) {
       add(s.id, 'welcome', 'REGISTRATION', 40, false, {
-        titleAr: 'أهلاً بك في الكلية! سجّل مقررات فصلك الأول',
-        titleEn: 'Welcome! Register your first-term courses',
-        messageAr: `جهّزنا لك مقررات الفصل الأول في صفحة «التسجيل». راجعها وأرسلها إلى مرشدك ${advisor.ar} للاعتماد.`,
-        messageEn: `Your first-term courses are ready on the Registration page. Review them and send them to your advisor, ${advisor.en}, for approval.`,
+        titleAr: 'أهلاً بك في الكلية!',
+        titleEn: 'Welcome to the faculty!',
+        messageAr: `مقررات فصلك الأول (المستوى الأول) تُسجَّل لك تلقائياً حسب اللائحة، فلا تحتاج إلى اختيارها. تجد مواعيدها في صفحة «التسجيل»، ومرشدك ${advisor.ar} يتابعك.`,
+        messageEn: `Your first-term (level 1) courses are registered for you automatically per the bylaw, so you do not choose them. The timetable is on the Registration page; your advisor, ${advisor.en}, follows up with you.`,
       });
     }
 
     if (s.warningCount > 0 && s.cumulativeGpa < minGpa) {
       const n = s.warningCount;
-      const nearDismissal = s.consecutiveWarnings >= lastWarningBeforeDismissal;
+      const nearDismissal = AcademicRulesEngine.oneWarningFromDismissal(s);
       add(s.id, `warning_${n}`, 'WARNING', D + 5 * H, false, {
         titleAr: `إنذار أكاديمي رقم ${n}`,
         titleEn: `Academic warning no. ${n}`,
-        messageAr: `معدلك التراكمي ${gpa} أقل من الحد الأدنى ${minGpaText}. خطة رفع المعدل جاهزة في صفحة «تحسين المعدل»، وراجع مرشدك ${advisor.ar}.${nearDismissal ? ' انتبه: الإنذار التالي يعرّضك للفصل.' : ''}`,
+        messageAr: `معدلك التراكمي ${gpa} أقل من الحد الأدنى ${minGpaText}. خطة رفع المعدل جاهزة في صفحة «تحسين المعدل»، وراجع مرشدك ${advisor.ar}.${nearDismissal ? ` انتبه: الإنذار التالي يبلغ حد الفصل (${dismissalText}).` : ''}`,
         messageEn: `Your cumulative GPA is ${gpa}, below the ${minGpaText} minimum. Your recovery plan is on the GPA recovery page; please meet your advisor, ${advisor.en}.${nearDismissal ? ' Note: one more warning puts you at risk of dismissal.' : ''}`,
       });
     }
@@ -464,7 +465,7 @@ export function buildSeedNotifications({ students, offerings, courses, rules, no
   const officer = STAFF_ACCOUNT_IDS.processOfficer;
   const warned = students.filter(s => s.warningCount > 0);
   if (warned.length) {
-    const nearDismissal = warned.filter(s => s.consecutiveWarnings >= lastWarningBeforeDismissal).length;
+    const nearDismissal = warned.filter(s => AcademicRulesEngine.oneWarningFromDismissal(s)).length;
     add(officer, 'warned_students', 'WARNING', 6 * H, false, {
       titleAr: `${countAr(warned.length, STUDENTS)} تحت الإنذار الأكاديمي`,
       titleEn: `${countEn(warned.length, 'student')} on academic warning`,

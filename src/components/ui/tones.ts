@@ -272,3 +272,35 @@ export const personName = (raw: string | undefined | null, lang: string): string
   const latin = s.match(/\(([A-Za-z][^()]*)/);
   return latin ? latin[1].trim() : head || s;
 };
+
+// --- Who registered a course (when it was not the student) -------------------------
+/** "المرشد: د. …" / "مدير النظام: …" / automatic first-term registration, in the reader's language. */
+export const registeredByLabel = (raw: string | undefined | null, lang: string): string => {
+  if (!raw) return lang === 'ar' ? 'الطالب (باعتماد المرشد)' : 'The student (advisor approved)';
+  if (/التسجيل التلقائي/.test(raw)) return lang === 'ar' ? 'تلقائي (الفصل الأول حسب اللائحة)' : 'Automatic (first term, per the bylaw)';
+  if (lang === 'ar') return raw;
+  return raw
+    .replace(/^المرشد:\s*/, 'Advisor: ')
+    .replace(/^مدير النظام:\s*/, 'Administrator: ')
+    .replace(/^موازنة:\s*/, 'Equivalency: ');
+};
+
+export const registeredByTone = (raw?: string | null): Tone =>
+  !raw ? 'ink' : /تلقائي/.test(raw) ? 'lane' : /مدير/.test(raw) ? 'plum' : /موازنة/.test(raw) ? 'caution' : 'route';
+
+// --- Registration follow-up stages -----------------------------------------------
+export const stageTone: Record<string, Tone> = {
+  NOT_STARTED: 'signal',
+  DRAFT: 'ink',
+  PENDING: 'route',
+  CHANGES_REQUESTED: 'caution',
+  REGISTERED: 'sign',
+};
+
+export const stageLabel: Record<string, Bilingual> = {
+  NOT_STARTED: { ar: 'لم يسجّل بعد', en: 'Not registered yet' },
+  DRAFT: { ar: 'يختار مقرراته (مسودة)', en: 'Choosing (draft)' },
+  PENDING: { ar: 'بانتظار اعتماد المرشد', en: 'Waiting for the advisor' },
+  CHANGES_REQUESTED: { ar: 'أُعيد للتعديل', en: 'Sent back for changes' },
+  REGISTERED: { ar: 'مسجّل', en: 'Registered' },
+};

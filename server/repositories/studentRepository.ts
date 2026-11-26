@@ -2,6 +2,33 @@ import { prisma } from '../db/prisma.js';
 import { Student, StudentCourseRecord, RiskLevel, TrainingStatus, PlanStatus, AcademicTrack } from '../../src/types/index.js';
 import { Prisma } from '@prisma/client';
 import { INITIAL_STUDENTS } from '../data/store.js';
+import { AcademicRulesEngine } from '../engines/rulesEngine.js';
+
+/**
+ * What every student query loads. Training proofs (the uploaded files) are never
+ * loaded here, only each submission's hours and status.
+ */
+export const STUDENT_INCLUDE = {
+  user: true,
+  advisor: { include: { user: true } },
+  records: {
+    include: { course: true, offering: { include: { semester: true } } },
+    orderBy: { createdAt: 'asc' as const },
+  },
+  studyPlans: { orderBy: { updatedAt: 'desc' as const }, take: 1 },
+  trainings: { select: { id: true, hours: true, status: true, createdAt: true }, orderBy: { createdAt: 'desc' as const } },
+};
+
+/** Hours that count are those of submissions the advisor accepted. */
+export function trainingSummary(rows: { hours: number; status: string }[] = []): { hours: number; status: TrainingStatus } {
+  const approved = rows.filter(r => r.status === 'ACCEPTED' || r.status === 'PASSED').reduce((sum, r) => sum + (r.hours || 0), 0);
+  const required = AcademicRulesEngine.TRAINING_REQUIRED_HOURS;
+  if (approved >= required) return { hours: approved, status: 'Passed' };
+  if (rows.some(r => r.status === 'PENDING')) return { hours: approved, status: 'Pending' };
+  if (approved > 0) return { hours: approved, status: 'Accepted' };
+  if (rows[0]?.status === 'FAILED') return { hours: 0, status: 'Failed' };
+  return { hours: 0, status: 'Pending' };
+}
 
 export class StudentRepository {
   /**
@@ -20,14 +47,21 @@ export class StudentRepository {
       grade: r.grade || undefined,
       gradePoints: r.gradePoints ?? undefined,
       status: r.status as 'PASSED' | 'FAILED' | 'ENROLLED' | 'IN_PROGRESS',
-      semesterId: r.offering?.semesterId || termOf(r)?.semesterId || 'sem_fall_2026',
-      semesterName: r.offering?.semester?.nameAr || termOf(r)?.semesterName || 'خريف 2026',
+      semesterId: r.source === 'EQUIVALENCY' ? 'equivalency' : r.offering?.semesterId || termOf(r)?.semesterId || 'sem_fall_2026',
+      semesterName:
+        r.source === 'EQUIVALENCY'
+          ? 'معادلة (موازنة)'
+          : r.offering?.semester?.nameAr || termOf(r)?.semesterName || 'خريف 2026',
       attempt: r.attempt || 1,
       attendancePercentage: r.attendancePercentage ?? 100,
       courseworkMark: r.courseworkMark ?? undefined,
       finalMark: r.finalMark ?? undefined,
       totalMark: r.totalMark ?? undefined,
       offeringId: r.offeringId || undefined,
+      source: r.source === 'EQUIVALENCY' ? 'EQUIVALENCY' : 'REGULAR',
+      registeredByName: r.registeredByName || undefined,
+      note: r.note || undefined,
+      registeredAt: r.createdAt ? new Date(r.createdAt).toISOString() : undefined,
     }));
 
     // Find latest study plan if any
@@ -36,6 +70,8 @@ export class StudentRepository {
     const resolvedPlanStatus: PlanStatus = latestPlan
       ? (latestPlan.status === 'APPROVED' ? 'Approved' : latestPlan.status === 'PENDING_REVIEW' ? 'Pending Review' : latestPlan.status === 'REJECTED' ? 'Rejected' : 'Draft')
       : (memStu?.currentPlanStatus || (row.cumulativeGpa < 2.0 ? 'Pending Review' : 'Approved'));
+
+    const training = row.trainings ? trainingSummary(row.trainings) : { hours: row.trainingHours ?? 0, status: (row.trainingStatus ?? 'Pending') as TrainingStatus };
 
     return {
       id: row.id,
@@ -57,10 +93,37 @@ export class StudentRepository {
       riskLevel: row.riskLevel as RiskLevel,
       riskReasons: [],
       records,
-      trainingHours: row.trainings?.[0]?.hours ?? 0,
-      trainingStatus: (row.trainings?.[0]?.status ?? 'Pending') as TrainingStatus,
+      trainingHours: training.hours,
+      trainingStatus: training.status,
       currentPlanStatus: resolvedPlanStatus,
+      admissionType: row.admissionType === 'TRANSFER' ? 'TRANSFER' : 'REGULAR',
+      previousInstitution: row.previousInstitution || undefined,
     };
+  }
+
+  /**
+   * The student with exactly this id, student code, user id or email, or null
+   * (unlike `findById`, never another student in its place).
+   */
+  public static async findExact(key: string): Promise<Student | null> {
+    if (!key) return null;
+    try {
+      const row = await prisma.student.findFirst({
+        where: {
+          OR: [
+            { id: key },
+            { studentCode: { equals: key, mode: 'insensitive' } },
+            { userId: key },
+            { user: { email: { equals: key, mode: 'insensitive' } } },
+          ],
+        },
+        include: STUDENT_INCLUDE,
+      });
+      return row ? this.mapToDomain(row) : null;
+    } catch (err) {
+      console.warn(`[StudentRepository] DB findExact fallback for ${key}:`, err);
+      return INITIAL_STUDENTS.find(s => s.id === key || s.studentCode === key || s.email === key) || null;
+    }
   }
 
   public static async findById(id: string): Promise<Student | null> {
@@ -70,19 +133,7 @@ export class StudentRepository {
     try {
       let row = await prisma.student.findUnique({
         where: { id },
-        include: {
-          user: true,
-          advisor: { include: { user: true } },
-          records: {
-            include: {
-              course: true,
-              offering: { include: { semester: true } },
-            },
-            orderBy: { createdAt: 'asc' },
-          },
-          studyPlans: { orderBy: { updatedAt: 'desc' }, take: 1 },
-          trainings: { take: 1 },
-        },
+        include: STUDENT_INCLUDE,
       });
 
       if (!row) {
@@ -95,37 +146,13 @@ export class StudentRepository {
               { user: { id } },
             ],
           },
-          include: {
-            user: true,
-            advisor: { include: { user: true } },
-            records: {
-              include: {
-                course: true,
-                offering: { include: { semester: true } },
-              },
-              orderBy: { createdAt: 'asc' },
-            },
-            studyPlans: { orderBy: { updatedAt: 'desc' }, take: 1 },
-            trainings: { take: 1 },
-          },
+          include: STUDENT_INCLUDE,
         });
       }
 
       if (!row) {
         row = await prisma.student.findFirst({
-          include: {
-            user: true,
-            advisor: { include: { user: true } },
-            records: {
-              include: {
-                course: true,
-                offering: { include: { semester: true } },
-              },
-              orderBy: { createdAt: 'asc' },
-            },
-            studyPlans: { orderBy: { updatedAt: 'desc' }, take: 1 },
-            trainings: { take: 1 },
-          },
+          include: STUDENT_INCLUDE,
           orderBy: { studentCode: 'asc' },
         });
       }
@@ -147,18 +174,7 @@ export class StudentRepository {
     try {
       const row = await prisma.student.findUnique({
         where: { studentCode },
-        include: {
-          user: true,
-          advisor: { include: { user: true } },
-          records: {
-            include: {
-              course: true,
-              offering: { include: { semester: true } },
-            },
-          },
-          studyPlans: { orderBy: { updatedAt: 'desc' }, take: 1 },
-          trainings: { take: 1 },
-        },
+        include: STUDENT_INCLUDE,
       });
 
       if (row) return this.mapToDomain(row);
@@ -201,18 +217,7 @@ export class StudentRepository {
 
       const rows = await prisma.student.findMany({
         where,
-        include: {
-          user: true,
-          advisor: { include: { user: true } },
-          records: {
-            include: {
-              course: true,
-              offering: { include: { semester: true } },
-            },
-          },
-          studyPlans: { orderBy: { updatedAt: 'desc' }, take: 1 },
-          trainings: { take: 1 },
-        },
+        include: STUDENT_INCLUDE,
         orderBy: { studentCode: 'asc' },
       });
 

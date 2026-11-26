@@ -222,8 +222,10 @@ console.log('\n--- SCENARIO 11: Graduation Project Eligibility Verification ---'
 const saraStudent = INITIAL_STUDENTS.find(s => s.id === 'stu_sara')!;
 assert(saraStudent.completedCredits >= 94, 'Scenario 11: Sara has 104 credits (>= 94 credits required)');
 
+// (Sara already sits in CS 498 this term, so check her as she was before registering it.)
+const saraBeforeRegistering = { ...saraStudent, records: saraStudent.records.filter(r => !(r.courseCode === 'CS 498' && r.status === 'IN_PROGRESS')) };
 const gradProjValidationSara = AcademicRulesEngine.validateRegistration(
-  saraStudent,
+  saraBeforeRegistering,
   ['CS 498'],
   coursesMap,
   offeringsMap

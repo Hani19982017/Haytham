@@ -84,10 +84,28 @@ export async function prepareDatabase(
   try {
     const [users, courses, rules] = await Promise.all([prisma.user.count(), prisma.course.count(), prisma.academicRule.count()]);
     const empty = users === 0 && courses === 0;
-    // The seed writes the bylaw rules last and the app cannot delete them, so fewer
-    // rules than the demo data has mean an earlier load stopped part-way (e.g. a host
-    // restarted the server) or the database was loaded by an older version of the app.
-    const unfinished = !empty && rules < INITIAL_ACADEMIC_RULES.length;
+    // The seed writes the bylaw rules last and the app cannot delete them, so no
+    // rules at all mean an earlier load stopped part-way (e.g. a host restarted the server).
+    const unfinished = !empty && rules === 0;
+    if (!empty && !unfinished && rules < INITIAL_ACADEMIC_RULES.length) {
+      // A database from an older version: add only the bylaw rules this version
+      // introduced, so data the faculty entered (or removed) is left as it is.
+      const added = await prisma.academicRule.createMany({
+        data: INITIAL_ACADEMIC_RULES.map(rule => ({
+          id: rule.id,
+          key: rule.key,
+          titleAr: rule.titleAr,
+          titleEn: rule.titleEn,
+          valueString: String(rule.value),
+          defaultValue: String(rule.defaultValue),
+          needsVerification: rule.needsVerification,
+          notesAr: rule.notesAr,
+          notesEn: rule.notesEn,
+        })),
+        skipDuplicates: true,
+      });
+      if (added.count) console.log(`[Database] Added ${added.count} new bylaw rules.`);
+    }
     if (empty || unfinished) {
       const seedStarted = Date.now();
       console.log(

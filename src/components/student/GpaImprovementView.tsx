@@ -274,13 +274,13 @@ export const GpaImprovementView: React.FC<GpaImprovementViewProps> = ({ onNaviga
             tone="sign"
             title={t('أنت في فصلك الأول، فلا يوجد معدل تراكمي لتحسينه بعد', 'This is your first term, so there is no GPA to recover yet')}
             description={t(
-              'يُحسب معدلك بعد ظهور نتائج هذا الفصل. إن احتجت يوماً إلى رفعه ستجد هنا خطط إعادة المقررات المناسبة لك. ابدأ الآن بتسجيل مقررات فصلك الأول.',
-              'Your GPA is worked out once this term’s results are in. If you ever need to raise it, recovery plans will show here. For now, register your first-term courses.'
+              'يُحسب معدلك بعد ظهور نتائج هذا الفصل. إن احتجت يوماً إلى رفعه ستجد هنا خطط إعادة المقررات المناسبة لك. مقررات فصلك الأول مسجلة لك تلقائياً حسب اللائحة.',
+              'Your GPA is worked out once this term’s results are in. If you ever need to raise it, recovery plans will show here. Your first-term courses are registered for you automatically per the bylaw.'
             )}
             action={
               <button type="button" className="btn btn-primary" onClick={() => handleNavigate('student-registration', '/student/registration')}>
                 <CalendarCheck aria-hidden="true" />
-                {t('اذهب إلى التسجيل', 'Go to registration')}
+                {t('شاهد مقررات فصلك الأول', 'See your first-term courses')}
               </button>
             }
           />

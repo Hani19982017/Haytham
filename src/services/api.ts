@@ -11,6 +11,15 @@ import {
   Course,
   CourseOffering,
   CourseRecommendation,
+  EnrollmentCheck,
+  EquivalencyCaseSummary,
+  EquivalencyEvaluation,
+  EquivalencyItemInput,
+  RegistrationOverview,
+  SectionRoster,
+  SectionSummary,
+  TrainingStatus,
+  TrainingSubmission,
   GpaImprovementPlan,
   NotificationItem,
   RegistrationRequest,
@@ -267,6 +276,16 @@ export const api = {
     return res.data.request;
   },
 
+  /** The request plus whether the student is a first-term student registered automatically. */
+  async getRegistrationStatus(studentId: string): Promise<{
+    request: RegistrationRequest | null;
+    firstTermAutomatic: boolean;
+    autoRegistration?: { status: 'REGISTERED' | 'FAILED'; registered: string[]; missing: string[] };
+  }> {
+    const res = await axiosClient.get(`/students/${encodeURIComponent(studentId)}/registration-request`);
+    return res.data;
+  },
+
   async saveRegistrationDraft(studentId: string, offeringIds: string[], clearRecovery = false): Promise<RegistrationRequest> {
     const res = await axiosClient.put(`/students/${encodeURIComponent(studentId)}/registration-request`, { offeringIds, clearRecovery });
     return res.data.request;
@@ -304,9 +323,93 @@ export const api = {
     return res.data;
   },
 
-  async submitTraining(studentId: string, data: { company: string; hours: number; periodWeeks: number }): Promise<any> {
-    const res = await axiosClient.post(`/students/${studentId}/training`, data);
+  // Summer training: each period with its proof (certificate), reviewed by the advisor
+  async getTrainingSubmissions(studentId: string): Promise<{ submissions: TrainingSubmission[]; requiredHours: number; minCredits: number; maxFileMb: number }> {
+    const res = await axiosClient.get(`/training/students/${encodeURIComponent(studentId)}`);
     return res.data;
+  },
+
+  async submitTraining(
+    studentId: string,
+    data: { company: string; hours: number; periodWeeks: number; startDate?: string; endDate?: string; notes?: string },
+    proof: File | null
+  ): Promise<{ success: boolean; submission: TrainingSubmission; trainingHours: number; trainingStatus: TrainingStatus }> {
+    const form = new FormData();
+    Object.entries(data).forEach(([k, v]) => {
+      if (v !== undefined && v !== null && v !== '') form.append(k, String(v));
+    });
+    if (proof) form.append('proof', proof, proof.name);
+    const res = await axiosClient.post(`/training/students/${encodeURIComponent(studentId)}`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
+    return res.data;
+  },
+
+  async getTrainingReviewQueue(status?: 'PENDING' | 'ACCEPTED' | 'FAILED'): Promise<TrainingSubmission[]> {
+    const res = await axiosClient.get('/training/review', { params: status ? { status } : {} });
+    return res.data;
+  },
+
+  async reviewTraining(id: string, decision: 'ACCEPT' | 'REJECT', notes: string): Promise<{ success: boolean; submission: TrainingSubmission }> {
+    const res = await axiosClient.post(`/training/${encodeURIComponent(id)}/review`, { decision, notes });
+    return res.data;
+  },
+
+  /**
+   * Open the uploaded proof in a new tab (fetched with the sign-in, so the file is
+   * never at a public link): an image or PDF shown in the page, with a download link.
+   */
+  async openTrainingProof(id: string, fileName?: string): Promise<void> {
+    const preview = window.open('', '_blank');
+    try {
+      const res = await axiosClient.get(`/training/${encodeURIComponent(id)}/proof`, { responseType: 'blob' });
+      const blob = res.data as Blob;
+      const href = URL.createObjectURL(blob);
+      const name = fileName || 'proof';
+      if (!preview) {
+        const a = document.createElement('a');
+        a.href = href;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(href), 60_000);
+        return;
+      }
+      const doc = preview.document;
+      doc.title = name;
+      doc.documentElement.dir = document.documentElement.dir || 'rtl';
+      doc.body.style.cssText = 'margin:0;background:#1d211f;font-family:system-ui,sans-serif;color:#fff';
+      const bar = doc.createElement('div');
+      bar.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 16px;background:#0b6439';
+      const title = doc.createElement('span');
+      title.textContent = name;
+      title.style.cssText = 'font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+      const link = doc.createElement('a');
+      link.href = href;
+      link.download = name;
+      link.textContent = document.documentElement.lang === 'en' ? 'Download the file' : 'تنزيل الملف';
+      link.style.cssText = 'color:#fff;font-weight:700;background:rgba(255,255,255,.15);padding:6px 12px;border-radius:8px;text-decoration:none;white-space:nowrap';
+      bar.append(title, link);
+      let viewer: HTMLElement;
+      if (blob.type.startsWith('image/')) {
+        const img = doc.createElement('img');
+        img.src = href;
+        img.alt = name;
+        img.style.cssText = 'display:block;max-width:100%;margin:16px auto;background:#fff';
+        viewer = img;
+      } else {
+        const frame = doc.createElement('iframe');
+        frame.src = href;
+        frame.title = name;
+        frame.style.cssText = 'display:block;width:100%;height:calc(100vh - 52px);border:0;background:#fff';
+        viewer = frame;
+      }
+      doc.body.replaceChildren(bar, viewer);
+      preview.addEventListener('beforeunload', () => URL.revokeObjectURL(href));
+      setTimeout(() => URL.revokeObjectURL(href), 15 * 60_000);
+    } catch (err) {
+      preview?.close();
+      throw err;
+    }
   },
 
   async getOfficialTranscript(studentId: string): Promise<any> {
@@ -344,7 +447,7 @@ export const api = {
   },
 
   // Instructor
-  async getInstructorCourses(): Promise<{ offerings: CourseOffering[]; courses: Course[] }> {
+  async getInstructorCourses(): Promise<{ offerings: CourseOffering[]; courses: Course[]; markScheme?: { courseworkMax: number; finalMax: number; total: number } }> {
     const res = await axiosClient.get('/instructor/courses');
     return res.data;
   },
@@ -458,6 +561,100 @@ export const api = {
         'Content-Type': 'multipart/form-data',
       },
     });
+    return res.data;
+  },
+
+  // Registration follow-up (advisor, administrator, student affairs)
+  async getRegistrationOverview(): Promise<RegistrationOverview> {
+    const res = await axiosClient.get('/registration/overview');
+    return res.data;
+  },
+
+  async downloadRegistrationOverview(filters: { stage?: string; level?: string; q?: string; advisorId?: string } = {}): Promise<void> {
+    const params = new URLSearchParams(Object.entries(filters).filter(([, v]) => !!v) as [string, string][]).toString();
+    await downloadFile(`/registration/overview.xlsx${params ? `?${params}` : ''}`, 'registration.xlsx');
+  },
+
+  async getRegistrationSections(): Promise<SectionSummary[]> {
+    const res = await axiosClient.get('/registration/sections');
+    return res.data;
+  },
+
+  async getSectionRoster(offeringId: string): Promise<SectionRoster> {
+    const res = await axiosClient.get(`/registration/sections/${encodeURIComponent(offeringId)}/students`);
+    return res.data;
+  },
+
+  async downloadSectionRoster(offeringId: string): Promise<void> {
+    await downloadFile(`/registration/sections/${encodeURIComponent(offeringId)}/students.xlsx`, 'section-students.xlsx');
+  },
+
+  async downloadCourseRoster(courseCode: string): Promise<void> {
+    await downloadFile(`/registration/courses/${encodeURIComponent(courseCode)}/students.xlsx`, 'course-students.xlsx');
+  },
+
+  async checkEnrollment(studentId: string, offeringIds: string[]): Promise<EnrollmentCheck & { currentCredits: number }> {
+    const res = await axiosClient.post(`/registration/students/${encodeURIComponent(studentId)}/check`, { offeringIds });
+    return res.data;
+  },
+
+  async enrollForStudent(
+    studentId: string,
+    offeringIds: string[],
+    options: { override?: boolean; reason?: string } = {}
+  ): Promise<{ success: boolean; registered: string[]; waived: string[]; exception: boolean; student: Student }> {
+    const res = await axiosClient.post(`/registration/students/${encodeURIComponent(studentId)}/enroll`, { offeringIds, ...options });
+    return res.data;
+  },
+
+  async dropForStudent(studentId: string, offeringId: string, reason = ''): Promise<{ success: boolean; removed: string; student: Student }> {
+    const res = await axiosClient.post(`/registration/students/${encodeURIComponent(studentId)}/drop`, { offeringId, reason });
+    return res.data;
+  },
+
+  async autoRegisterFreshmen(): Promise<{ registered: number; failed: number; students: { studentCode: string; registered: string[]; missing: string[] }[] }> {
+    const res = await axiosClient.post('/registration/freshmen/auto-register');
+    return res.data;
+  },
+
+  // Equivalency (موازنة) of transfer students
+  async getEquivalencyCases(): Promise<EquivalencyCaseSummary[]> {
+    const res = await axiosClient.get('/equivalency/cases');
+    return res.data;
+  },
+
+  async previewEquivalency(items: EquivalencyItemInput[], studentId?: string): Promise<EquivalencyEvaluation> {
+    const res = await axiosClient.post('/equivalency/preview', { items, studentId });
+    return res.data;
+  },
+
+  async createEquivalency(body: {
+    studentId?: string;
+    newStudent?: { nameAr: string; nameEn?: string; email: string; studentCode: string; track?: string; password?: string };
+    previousInstitution: string;
+    previousProgram?: string;
+    notes?: string;
+    items: EquivalencyItemInput[];
+  }): Promise<{ case: EquivalencyCaseSummary; createdAccount?: { email: string; password: string } }> {
+    const res = await axiosClient.post('/equivalency/cases', body);
+    return res.data;
+  },
+
+  async updateEquivalency(
+    id: string,
+    body: { previousInstitution?: string; previousProgram?: string; notes?: string; items?: EquivalencyItemInput[] }
+  ): Promise<{ case: EquivalencyCaseSummary }> {
+    const res = await axiosClient.put(`/equivalency/cases/${encodeURIComponent(id)}`, body);
+    return res.data;
+  },
+
+  async approveEquivalency(id: string): Promise<{ case: EquivalencyCaseSummary }> {
+    const res = await axiosClient.post(`/equivalency/cases/${encodeURIComponent(id)}/approve`);
+    return res.data;
+  },
+
+  async deleteEquivalency(id: string): Promise<{ success: boolean }> {
+    const res = await axiosClient.delete(`/equivalency/cases/${encodeURIComponent(id)}`);
     return res.data;
   },
 

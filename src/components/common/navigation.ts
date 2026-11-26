@@ -23,6 +23,8 @@ import {
   FileSpreadsheet,
   QrCode,
   ScanLine,
+  ClipboardList,
+  Repeat,
 } from 'lucide-react';
 import type { UserRole } from '../../types/index.js';
 
@@ -34,6 +36,8 @@ export interface NavStation {
   hintAr: string;
   hintEn: string;
   icon: LucideIcon;
+  /** Other pages shown as this station (e.g. the sub-pages of the statistics). */
+  aliases?: string[];
 }
 
 export const NAV_BY_ROLE: Record<UserRole, NavStation[]> = {
@@ -121,6 +125,14 @@ export const NAV_BY_ROLE: Record<UserRole, NavStation[]> = {
       icon: FileCheck2,
     },
     {
+      id: 'advisor-registration',
+      labelAr: 'متابعة التسجيل',
+      labelEn: 'Registration',
+      hintAr: 'من سجّل ومن لم يسجّل بعد ومن ينتظر اعتمادك، مع الترتيب وتنزيل Excel والتسجيل للطالب',
+      hintEn: 'Who has registered, who has not and who is waiting for you; sort, Excel, register for a student',
+      icon: ClipboardList,
+    },
+    {
       id: 'advisor-students',
       labelAr: 'طلابي',
       labelEn: 'My students',
@@ -165,6 +177,31 @@ export const NAV_BY_ROLE: Record<UserRole, NavStation[]> = {
       hintAr: 'حالة النظام وقاعدة البيانات والربط مع ابن الهيثم',
       hintEn: 'System, database and Ibn Al-Haitham sync status',
       icon: Gauge,
+    },
+    {
+      id: 'head-analytics',
+      aliases: ['head-hotspots', 'head-seats'],
+      labelAr: 'الإحصاءات',
+      labelEn: 'Statistics',
+      hintAr: 'مؤشرات القسم: توزيع المخاطر وبؤر الرسوب وضغط المقاعد',
+      hintEn: 'Department indicators: risk, failure hotspots and seat demand',
+      icon: BarChart3,
+    },
+    {
+      id: 'admin-registration',
+      labelAr: 'التسجيل',
+      labelEn: 'Registration',
+      hintAr: 'حالة تسجيل كل الطلاب، كشوف أسماء الشعب، تنزيل Excel، والتسجيل لأي طالب',
+      hintEn: 'Every student’s registration, section lists, Excel, and registering for any student',
+      icon: ClipboardList,
+    },
+    {
+      id: 'admin-equivalency',
+      labelAr: 'الموازنة',
+      labelEn: 'Equivalency',
+      hintAr: 'طلاب الموازنة (المحوَّلون): معادلة مقرراتهم بتقديرات الكلية',
+      hintEn: 'Transfer students: credit their courses on our grading scale',
+      icon: Repeat,
     },
     {
       id: 'admin-users',
@@ -249,6 +286,14 @@ export const NAV_BY_ROLE: Record<UserRole, NavStation[]> = {
       hintAr: 'بيانات الطلاب والتسجيل (قراءة فقط)',
       hintEn: 'Student and registration records (read-only)',
       icon: FileSpreadsheet,
+    },
+    {
+      id: 'process-registration',
+      labelAr: 'متابعة التسجيل',
+      labelEn: 'Registration',
+      hintAr: 'من سجّل ومن لم يسجّل، وكشوف الشعب، وتنزيلها Excel (اطلاع فقط)',
+      hintEn: 'Who has registered, section lists, Excel downloads (view only)',
+      icon: ClipboardList,
     },
   ],
 };
