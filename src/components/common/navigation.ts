@@ -312,3 +312,18 @@ export const ROLE_HOME: Record<UserRole, string> = {
 };
 
 export const roleHome = (role?: UserRole | null): string => (role && ROLE_HOME[role]) || '/student/dashboard';
+
+/** The parts of the app each role may open (matches the role checks on the routes in App.tsx). */
+const ROLE_AREAS: Record<UserRole, string[]> = {
+  STUDENT: ['/student/', '/a/', '/attend/'],
+  ACADEMIC_ADVISOR: ['/advisor/'],
+  INSTRUCTOR: ['/instructor/'],
+  TEACHING_ASSISTANT: ['/ta/'],
+  ADMIN: ['/admin/', '/advisor/', '/instructor/', '/ta/', '/department/', '/process/'],
+  DEPARTMENT_HEAD: ['/department/'],
+  PROCESS_OFFICER: ['/process/'],
+};
+
+/** May this role open this page? */
+export const canOpenPath = (role: UserRole | null | undefined, pathname: string): boolean =>
+  !!role && (ROLE_AREAS[role] || []).some(area => `${pathname}/`.startsWith(area));

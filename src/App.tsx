@@ -4,6 +4,7 @@ import {
   Routes,
   Route,
   Navigate,
+  Outlet,
   useNavigate,
   useLocation,
 } from 'react-router-dom';
@@ -31,7 +32,7 @@ import { StudentAttendanceView } from './components/student/StudentAttendanceVie
 import { AttendCheckInView } from './components/student/AttendCheckInView.js';
 import { StaffAttendanceView } from './components/attendance/StaffAttendanceView.js';
 import { RegistrationCenter } from './components/registration/RegistrationCenter.js';
-import { roleHome } from './components/common/navigation.js';
+import { roleHome, canOpenPath } from './components/common/navigation.js';
 
 // Helper to map URL pathname to sidebar tab
 const getTabFromPath = (pathname: string): string => {
@@ -169,24 +170,32 @@ const DashboardLayout: React.FC = () => {
       <main id="app-shell-main" className="mx-auto w-full max-w-[1440px] flex-1 px-4 py-7 sm:px-6 lg:px-8 lg:py-9">
         <div key={viewKey} className="animate-fade-in">
           <Routes>
-            {/* Student Protected Routes */}
+            {/* Student pages: for students only (staff see students through their own pages) */}
             <Route
-              path="/student/dashboard"
-              element={<StudentDashboard onNavigateTab={handleSelectTab} />}
-            />
-            <Route
-              path="/student/recommendations"
-              element={<RecommendationsView onNavigateTab={handleSelectTab} />}
-            />
-            <Route path="/student/study-plan" element={<StudyPlanView onNavigateTab={handleSelectTab} />} />
-            <Route path="/student/what-if" element={<WhatIfSimulator />} />
-            <Route path="/student/gpa-plan" element={<GpaImprovementView onNavigateTab={handleSelectTab} />} />
-            <Route path="/student/registration" element={<CourseRegistrationView />} />
-            <Route path="/student/training" element={<SummerTrainingView />} />
-            <Route path="/student/attendance" element={<StudentAttendanceView />} />
-            {/* Opened by scanning a lecture's QR code with the phone camera */}
-            <Route path="/a/:token" element={<AttendCheckInView />} />
-            <Route path="/attend/:sessionId/:token" element={<AttendCheckInView />} />
+              element={
+                <ProtectedRoute allowedRoles={['STUDENT']}>
+                  <Outlet />
+                </ProtectedRoute>
+              }
+            >
+              <Route
+                path="/student/dashboard"
+                element={<StudentDashboard onNavigateTab={handleSelectTab} />}
+              />
+              <Route
+                path="/student/recommendations"
+                element={<RecommendationsView onNavigateTab={handleSelectTab} />}
+              />
+              <Route path="/student/study-plan" element={<StudyPlanView onNavigateTab={handleSelectTab} />} />
+              <Route path="/student/what-if" element={<WhatIfSimulator />} />
+              <Route path="/student/gpa-plan" element={<GpaImprovementView onNavigateTab={handleSelectTab} />} />
+              <Route path="/student/registration" element={<CourseRegistrationView />} />
+              <Route path="/student/training" element={<SummerTrainingView />} />
+              <Route path="/student/attendance" element={<StudentAttendanceView />} />
+              {/* Opened by scanning a lecture's QR code with the phone camera */}
+              <Route path="/a/:token" element={<AttendCheckInView />} />
+              <Route path="/attend/:sessionId/:token" element={<AttendCheckInView />} />
+            </Route>
 
             {/* Advisor Protected Routes */}
             <Route
@@ -299,7 +308,8 @@ const LoginPageContainer: React.FC = () => {
   useEffect(() => {
     if (!currentUser) return;
     const from = (location.state as { from?: { pathname?: string; search?: string } } | null)?.from;
-    const back = from?.pathname && from.pathname !== '/login' && from.pathname !== '/' ? `${from.pathname}${from.search || ''}` : null;
+    // Only go back to a page this account may open (a student's page never opens for staff).
+    const back = from?.pathname && canOpenPath(currentUser.role, from.pathname) ? `${from.pathname}${from.search || ''}` : null;
     navigate(back || roleHome(currentUser.role), { replace: true });
   }, [currentUser, navigate, location.state]);
 

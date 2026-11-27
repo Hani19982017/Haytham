@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { api, AuthUser } from '../services/api.js';
 
 export interface AuthContextType {
@@ -6,6 +7,8 @@ export interface AuthContextType {
   login: (identifier: string, password: string) => Promise<{ success: boolean; user?: AuthUser; error?: string }>;
   logout: () => Promise<void>;
   isLoading: boolean;
+  /** True after the user signed out on purpose: the next sign-in starts fresh on its own home page. */
+  signedOut: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -13,6 +16,8 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [signedOut, setSignedOut] = useState<boolean>(false);
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     async function initAuth() {
@@ -51,6 +56,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsLoading(true);
     try {
       const res = await api.login(identifier, password);
+      queryClient.clear(); // nothing loaded for an earlier account carries over
+      setSignedOut(false);
       setCurrentUser(res.user);
       return { success: true, user: res.user };
     } catch (err: any) {
@@ -70,6 +77,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       await api.logout();
     } finally {
+      // Forget everything about this account: its data and the page it was on.
+      queryClient.clear();
+      setSignedOut(true);
       setCurrentUser(null);
       localStorage.removeItem('auth_token');
       localStorage.removeItem('auth_user');
@@ -79,7 +89,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <AuthContext.Provider value={{ currentUser, login, logout, isLoading }}>
+    <AuthContext.Provider value={{ currentUser, login, logout, isLoading, signedOut }}>
       {children}
     </AuthContext.Provider>
   );

@@ -15,7 +15,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   children,
   allowedRoles,
 }) => {
-  const { currentUser, isLoading } = useAuth();
+  const { currentUser, isLoading, signedOut } = useAuth();
   const { t } = useLanguage();
   const location = useLocation();
 
@@ -27,9 +27,11 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
     );
   }
 
-  // Forceful redirect to /login if unauthenticated
+  // Not signed in: go to /login. Remember this page only for someone arriving
+  // without a session (e.g. a scanned attendance link), never after a sign-out,
+  // so the next person to sign in does not land on the previous user's page.
   if (!currentUser) {
-    return <Navigate to="/login" state={{ from: location }} replace />;
+    return <Navigate to="/login" state={signedOut ? undefined : { from: location }} replace />;
   }
 
   // Enforce Role-Based Access Control (RBAC)
